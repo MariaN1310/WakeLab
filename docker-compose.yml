@@ -1,0 +1,48 @@
+services:
+  web:
+    image: ghcr.io/marian1310/wakelab:latest
+    container_name: wakelab
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      TZ: America/Argentina/Buenos_Aires
+      WEB_PORT: ${WEB_PORT:-8472}
+      WAKELAB_SECRET: ${WAKELAB_SECRET}
+      WAKELAB_DB_HOST: 127.0.0.1
+      WAKELAB_DB_PORT: 3307
+      WAKELAB_DB_NAME: wakelab
+      WAKELAB_DB_USER: ${WAKELAB_DB_USER}
+      WAKELAB_DB_PASS: ${WAKELAB_DB_PASS}
+    volumes:
+      - /mnt/appdata/WakeLab/ssh:/var/www/.ssh
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:${WEB_PORT:-8472}/login.php"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  db:
+    image: mysql:8.0
+    container_name: wakelab-db
+    restart: unless-stopped
+    network_mode: host
+    command: --port=3307
+    environment:
+      MYSQL_DATABASE: wakelab
+      MYSQL_USER: ${WAKELAB_DB_USER}
+      MYSQL_PASSWORD: ${WAKELAB_DB_PASS}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./DB.sql:/docker-entrypoint-initdb.d/wakelab.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-P", "3307"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  db_data:

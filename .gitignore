@@ -1,0 +1,11 @@
+.env
+.env.local
+php/config.local.php
+/tmp/homelab_status_cache.json
+docs/*
+ISSUES.md
+.claude/
+.dockerignore
+Dockerfile
+Dockerfile.db
+docker-entrypoint.sh

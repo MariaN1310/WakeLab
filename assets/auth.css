@@ -1,0 +1,214 @@
+/* ============================================================
+   auth.css — WakeLab login / registro
+   Usa las mismas variables CSS que style.css.
+   ============================================================ */
+
+/* ── Variables (dark por defecto) ───────────────────────────── */
+:root {
+	--bg:        #0d1117;
+	--bg-card:   #161b22;
+	--bg-deep:   #0d1117;
+	--bg-hover:  #1c2128;
+	--border:    #30363d;
+	--text:      #f0f6fc;
+	--text-muted:#8b949e;
+	--text-dim:  #6e7681;
+	--blue:      #58a6ff;
+	--green:     #3fb950;
+	--amber:     #d29922;
+	--red:       #f85149;
+	--radius-sm: 6px;
+	--radius:    10px;
+	--radius-lg: 14px;
+}
+
+/* ── Variables (light) ──────────────────────────────────────── */
+:root.light {
+	--bg:        #f6f8fa;
+	--bg-card:   #ffffff;
+	--bg-deep:   #f0f2f5;
+	--bg-hover:  #e8ecf0;
+	--border:    #d0d7de;
+	--text:      #1f2328;
+	--text-muted:#57606a;
+	--text-dim:  #8c959f;
+	--blue:      #0969da;
+	--green:     #1a7f37;
+	--amber:     #9a6700;
+	--red:       #cf222e;
+}
+
+/* ── Reset / base ────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+	background: var(--bg);
+	color: var(--text);
+	font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+	margin: 0;
+	-webkit-font-smoothing: antialiased;
+}
+
+code {
+	background: var(--bg-deep);
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	padding: 1px 6px;
+	font-size: 11px;
+	color: var(--blue);
+}
+
+a { color: var(--blue); text-decoration: none; }
+a:hover { color: var(--blue); text-decoration: underline; }
+
+/* ── Auth pages (login / registro) ──────────────────────────── */
+.auth-body {
+	min-height: 100vh;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 24px 16px;
+	position: relative;
+}
+
+.auth-card {
+	background: var(--bg-card);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-lg);
+	padding: 36px 32px;
+	width: 100%;
+	max-width: 420px;
+}
+
+.auth-logo {
+	text-align: center;
+	margin-bottom: 24px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+}
+
+.auth-logo img {
+	width: 32px;
+	height: 32px;
+	object-fit: contain;
+}
+
+.brand {
+	font-size: 22px;
+	font-weight: 700;
+	color: var(--text);
+	letter-spacing: .02em;
+}
+.brand span { color: var(--blue); }
+
+.auth-title {
+	font-size: 15px;
+	font-weight: 600;
+	color: var(--text);
+	text-align: center;
+	margin: 0 0 20px;
+}
+
+.auth-error {
+	background: rgba(248, 81, 73, .1);
+	border: 1px solid rgba(248, 81, 73, .3);
+	color: var(--red);
+	border-radius: var(--radius);
+	padding: 10px 14px;
+	font-size: 13px;
+	text-align: center;
+	margin-bottom: 16px;
+}
+
+.auth-success {
+	background: rgba(63, 185, 80, .1);
+	border: 1px solid rgba(63, 185, 80, .3);
+	color: var(--green);
+	border-radius: var(--radius);
+	padding: 10px 14px;
+	font-size: 13px;
+	text-align: center;
+	margin-bottom: 16px;
+}
+
+.auth-footer {
+	text-align: center;
+	margin-top: 18px;
+	font-size: 13px;
+	color: var(--text-muted);
+}
+.auth-footer a { color: var(--blue); text-decoration: none; }
+.auth-footer a:hover { text-decoration: underline; }
+
+.form-hint {
+	font-size: 11px;
+	color: var(--text-dim);
+	margin-top: 4px;
+	padding-left: 2px;
+}
+
+/* ── Bootstrap overrides ─────────────────────────────────────── */
+.form-label {
+	color: var(--text-muted);
+	font-size: 11px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: .06em;
+	margin-bottom: 6px;
+}
+
+.form-control {
+	background: var(--bg-deep) !important;
+	border: 1px solid var(--border) !important;
+	color: var(--text) !important;
+	border-radius: 6px;
+	font-size: 14px;
+	transition: border-color .15s, box-shadow .15s;
+}
+.form-control:focus {
+	border-color: var(--blue) !important;
+	box-shadow: 0 0 0 3px rgba(88, 166, 255, .15) !important;
+	outline: none;
+}
+.form-control::placeholder { color: var(--text-dim) !important; }
+
+.input-group-text {
+	background: var(--bg-deep) !important;
+	border: 1px solid var(--border) !important;
+	color: var(--text-muted) !important;
+}
+
+.btn-primary {
+	background: var(--blue) !important;
+	border-color: var(--blue) !important;
+	color: #fff !important;
+	font-weight: 600;
+	font-size: 14px;
+	padding: 10px;
+	border-radius: var(--radius);
+	transition: opacity .15s;
+}
+.btn-primary:hover,
+.btn-primary:focus {
+	opacity: .88;
+}
+.btn-primary:active { opacity: 1; }
+
+/* ── Theme toggle ────────────────────────────────────────────── */
+.auth-theme-toggle {
+	position: absolute;
+	top: 16px;
+	right: 16px;
+	background: none;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	color: var(--text-muted);
+	cursor: pointer;
+	padding: 5px 8px;
+	font-size: 14px;
+	line-height: 1;
+	transition: border-color .15s, color .15s;
+}
+.auth-theme-toggle:hover { border-color: var(--text-dim); color: var(--text); }
