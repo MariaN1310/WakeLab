@@ -868,7 +868,36 @@ async function loadWakeSplashSettings() {
         if (retriesEl) retriesEl.value = retries;
         const tokenEl = document.getElementById('wp-token-val');
         if (tokenEl && cfg.wake_proxy_secret) tokenEl.textContent = cfg.wake_proxy_secret;
+
+        // Access control
+        const localOnly = cfg.wp_local_only === '1';
+        const blockBots = cfg.wp_block_bots === '1';
+        const lo = document.getElementById('wp-local-only');
+        const bb = document.getElementById('wp-block-bots');
+        const rangesEl = document.getElementById('wp-allowed-ranges');
+        const blockedIpsEl = document.getElementById('wp-blocked-ips');
+        const blockedUaEl = document.getElementById('wp-blocked-ua');
+        const rangesSection = document.getElementById('wp-ranges-section');
+        const uaSection = document.getElementById('wp-ua-section');
+        if (lo) lo.checked = localOnly;
+        if (bb) bb.checked = blockBots;
+        if (rangesEl) rangesEl.value = cfg.wp_allowed_ranges || '192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12';
+        if (blockedIpsEl) blockedIpsEl.value = cfg.wp_blocked_ips || '';
+        if (blockedUaEl) blockedUaEl.value = cfg.wp_blocked_ua || '';
+        if (rangesSection) rangesSection.style.display = localOnly ? '' : 'none';
+        if (uaSection) uaSection.style.display = blockBots ? '' : 'none';
+        if (lo) lo.addEventListener('change', () => {
+            if (rangesSection) rangesSection.style.display = lo.checked ? '' : 'none';
+        });
+        if (bb) bb.addEventListener('change', () => {
+            if (uaSection) uaSection.style.display = bb.checked ? '' : 'none';
+        });
     } catch(e) {}
+}
+
+function saveWpSetting(key, value) {
+    fetch('php/api.php', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({action:'update_setting', key, value})});
 }
 
 async function regenWakeProxyToken(btn) {

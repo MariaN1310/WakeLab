@@ -1750,9 +1750,14 @@ $npmWpToken  = $_wpTokenRow ?: '';
                         <div class="wp-hdr-sub">Boot-on-demand — services that start automatically when accessed</div>
                     </div>
                 </div>
-                <button class="btn btn-outline-success btn-sm" onclick="openWakeProxyModal()">
-                    <i class="bi bi-plus-lg me-1"></i>add proxy
-                </button>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="sidebarNav(document.getElementById('sb-push'),'htab-push');setTimeout(()=>{settingsSwitch('sistema');sysSwitch('wakeproxy')},150)" title="Wake Proxy settings">
+                        <i class="bi bi-gear"></i>
+                    </button>
+                    <button class="btn btn-outline-success btn-sm" onclick="openWakeProxyModal()">
+                        <i class="bi bi-plus-lg me-1"></i>add proxy
+                    </button>
+                </div>
             </div>
 
             <?php if (empty($wake_proxies)): ?>
@@ -2918,6 +2923,64 @@ location /_wl/ {
                                 <button class="btn btn-sm btn-outline-secondary" onclick="regenWakeProxyToken(this)">
                                     <i class="bi bi-arrow-clockwise me-1"></i>Regenerate token
                                 </button>
+                            </div>
+                        </div>
+
+                        <div class="card mt-3">
+                            <div class="card-body">
+                                <div class="sec-label">Access Control</div>
+
+                                <div class="push-evt-row">
+                                    <div class="push-evt-info">
+                                        <span class="notif-evt-icon" style="color:#8b949e"><i class="bi bi-house-lock"></i></span>
+                                        <div>
+                                            <span class="push-evt-label">Local network only</span>
+                                            <div style="font-size:11px;color:var(--text-dim)">Only wake servers for requests from allowed IP ranges</div>
+                                        </div>
+                                    </div>
+                                    <div class="form-check form-switch mb-0">
+                                        <input class="form-check-input" type="checkbox" role="switch" id="wp-local-only"
+                                               onchange="saveWpSetting('wp_local_only', this.checked ? '1' : '0')">
+                                    </div>
+                                </div>
+
+                                <div id="wp-ranges-section" style="margin:8px 0 12px;display:none">
+                                    <label style="font-size:11px;color:var(--text-dim);margin-bottom:4px;display:block">Allowed IP ranges (CIDR, comma-separated)</label>
+                                    <textarea class="form-control form-control-sm" id="wp-allowed-ranges" rows="2"
+                                              style="font-family:monospace;font-size:12px"
+                                              placeholder="192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12"
+                                              onchange="saveWpSetting('wp_allowed_ranges', this.value.trim())"></textarea>
+                                </div>
+
+                                <div class="push-evt-row" style="margin-top:4px">
+                                    <div class="push-evt-info">
+                                        <span class="notif-evt-icon" style="color:#8b949e"><i class="bi bi-robot"></i></span>
+                                        <div>
+                                            <span class="push-evt-label">Block bots & scanners</span>
+                                            <div style="font-size:11px;color:var(--text-dim)">Block known crawlers and vulnerability scanners by User-Agent</div>
+                                        </div>
+                                    </div>
+                                    <div class="form-check form-switch mb-0">
+                                        <input class="form-check-input" type="checkbox" role="switch" id="wp-block-bots"
+                                               onchange="saveWpSetting('wp_block_bots', this.checked ? '1' : '0')">
+                                    </div>
+                                </div>
+
+                                <div id="wp-ua-section" style="margin:8px 0 12px;display:none">
+                                    <label style="font-size:11px;color:var(--text-dim);margin-bottom:4px;display:block">Additional blocked User-Agents (one per line, partial match)</label>
+                                    <textarea class="form-control form-control-sm" id="wp-blocked-ua" rows="3"
+                                              style="font-family:monospace;font-size:12px"
+                                              placeholder="myspecialbot&#10;custom-scanner"
+                                              onchange="saveWpSetting('wp_blocked_ua', this.value.trim())"></textarea>
+                                </div>
+
+                                <div style="margin-top:8px">
+                                    <label style="font-size:11px;color:var(--text-dim);margin-bottom:4px;display:block">Blocked IPs / ranges (CIDR, comma-separated) — always blocked regardless of other rules</label>
+                                    <textarea class="form-control form-control-sm" id="wp-blocked-ips" rows="2"
+                                              style="font-family:monospace;font-size:12px"
+                                              placeholder="1.2.3.4, 5.6.7.0/24"
+                                              onchange="saveWpSetting('wp_blocked_ips', this.value.trim())"></textarea>
+                                </div>
                             </div>
                         </div>
                     </div><!-- /#sys-panel-wakeproxy -->

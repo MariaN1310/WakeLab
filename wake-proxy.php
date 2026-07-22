@@ -37,7 +37,7 @@ require_once __DIR__ . '/php/pve.php';
     $s = $pdo->prepare("SELECT `value` FROM settings WHERE `key`='wake_proxy_secret' LIMIT 1");
     $s->execute();
     $stored = (string)($s->fetchColumn() ?: '');
-    if ($stored === '') return; // sin token configurado: permitir todo
+    if ($stored === '') { http_response_code(403); echo '<!DOCTYPE html><html><body>Wake Proxy not configured.</body></html>'; exit; }
 
     $incoming = $_SERVER['HTTP_X_WAKE_PROXY_TOKEN']
              ?? $_SERVER['HTTP_X_WAKEPROXY_TOKEN']
@@ -59,6 +59,87 @@ require_once __DIR__ . '/php/pve.php';
         exit;
     }
 })();
+
+// ─────────────────────────────────────────────────────────────
+// IP / BOT FILTER
+(function() use ($pdo): void {
+    // Resolve real client IP (X-Forwarded-For first, then REMOTE_ADDR)
+    $rawIp = trim(explode(',', $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? '0')[0]);
+    $clientIp = preg_replace('/[^a-f0-9:.]/', '', $rawIp) ?: '0.0.0.0';
+
+    // ── Bot / User-Agent block ────────────────────────────────
+    $blockBots = getSplashSettingEarly($pdo, 'wp_block_bots', '0') === '1';
+    if ($blockBots) {
+        $ua = strtolower($_SERVER['HTTP_USER_AGENT'] ?? '');
+        $defaultBotPatterns = [
+            'googlebot','bingbot','slurp','duckduckbot','baiduspider','yandexbot','sogou',
+            'facebot','ia_archiver','semrushbot','ahrefsbot','dotbot','mj12bot','blexbot',
+            'petalbot','bytespider','gptbot','ccbot','anthropic-ai','claudebot','oai-searchbot',
+            'dataforseobot','serpstatbot','seokicks','rogerbot','linkdexbot','exabot',
+            'nmap','nikto','sqlmap','masscan','zgrab','nuclei','dirbuster','gobuster',
+            'python-requests','go-http-client','curl/','wget/','libwww-perl','scrapy',
+        ];
+        $customUa = getSplashSettingEarly($pdo, 'wp_blocked_ua', '');
+        $customPatterns = $customUa !== '' ? array_filter(array_map('trim', explode("\n", strtolower($customUa)))) : [];
+        $allPatterns = array_merge($defaultBotPatterns, $customPatterns);
+        foreach ($allPatterns as $pattern) {
+            if ($pattern !== '' && strpos($ua, $pattern) !== false) {
+                http_response_code(503);
+                echo '<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="font-family:system-ui;padding:2rem;background:#0d1117;color:#8b949e;text-align:center"><p style="margin-top:4rem">Service temporarily unavailable.</p></body></html>';
+                exit;
+            }
+        }
+    }
+
+    // ── Local-only mode ───────────────────────────────────────
+    $localOnly = getSplashSettingEarly($pdo, 'wp_local_only', '0') === '1';
+    if (!$localOnly) return;
+
+    // Check blocked IPs/CIDRs first
+    $blockedRaw = getSplashSettingEarly($pdo, 'wp_blocked_ips', '');
+    if ($blockedRaw !== '') {
+        $blocked = array_filter(array_map('trim', explode(',', $blockedRaw)));
+        foreach ($blocked as $cidr) {
+            if (ipInCidr($clientIp, $cidr)) {
+                http_response_code(403);
+                echo '<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="font-family:system-ui;padding:2rem;background:#0d1117;color:#8b949e;text-align:center"><p style="margin-top:4rem">Access denied.</p></body></html>';
+                exit;
+            }
+        }
+    }
+
+    // Check allowed ranges
+    $rangesRaw = getSplashSettingEarly($pdo, 'wp_allowed_ranges', '192.168.0.0/16,10.0.0.0/8,172.16.0.0/12');
+    $ranges = array_filter(array_map('trim', explode(',', $rangesRaw)));
+    foreach ($ranges as $cidr) {
+        if (ipInCidr($clientIp, $cidr)) return; // allowed
+    }
+
+    // Not in any allowed range
+    http_response_code(503);
+    echo '<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="font-family:system-ui;padding:2rem;background:#0d1117;color:#8b949e;text-align:center"><p style="margin-top:4rem">Service temporarily unavailable.</p></body></html>';
+    exit;
+})();
+
+function getSplashSettingEarly(PDO $pdo, string $key, string $default): string {
+    try {
+        $s = $pdo->prepare("SELECT value FROM settings WHERE `key`=? LIMIT 1");
+        $s->execute([$key]);
+        $v = $s->fetchColumn();
+        return $v !== false ? (string)$v : $default;
+    } catch (Throwable $e) { return $default; }
+}
+
+function ipInCidr(string $ip, string $cidr): bool {
+    if (strpos($cidr, '/') === false) return $ip === $cidr;
+    [$subnet, $bits] = explode('/', $cidr, 2);
+    $bits = (int)$bits;
+    $ipLong  = ip2long($ip);
+    $subLong = ip2long($subnet);
+    if ($ipLong === false || $subLong === false) return false;
+    $mask = $bits === 0 ? 0 : (~0 << (32 - $bits));
+    return ($ipLong & $mask) === ($subLong & $mask);
+}
 
 // ─────────────────────────────────────────────────────────────
 // HELPERS

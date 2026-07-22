@@ -632,11 +632,17 @@ case 'get_config':
 		'wake_proxy_splash_mode'    =>        getSetting($pdo, 'wake_proxy_splash_mode',    'detailed'),
 		'wake_proxy_max_retries'    =>        getSetting($pdo, 'wake_proxy_max_retries',    '3'),
 		'wake_proxy_secret'         =>        $wpSecret,
+		'wp_local_only'             =>        getSetting($pdo, 'wp_local_only',             '0'),
+		'wp_allowed_ranges'         =>        getSetting($pdo, 'wp_allowed_ranges',         '192.168.0.0/16,10.0.0.0/8,172.16.0.0/12'),
+		'wp_blocked_ips'            =>        getSetting($pdo, 'wp_blocked_ips',            ''),
+		'wp_block_bots'             =>        getSetting($pdo, 'wp_block_bots',             '0'),
+		'wp_blocked_ua'             =>        getSetting($pdo, 'wp_blocked_ua',             ''),
 	]);
 	break;
 
 // ─────────────────────────────────────────────────────────────
 case 'regenerate_wake_proxy_token':
+	if ($_SERVER['REQUEST_METHOD'] !== 'POST') { http_response_code(405); echo err('Method not allowed'); break; }
 	$newSecret = bin2hex(random_bytes(24));
 	$pdo->prepare("INSERT INTO settings (`key`,`value`,`description`) VALUES (?,?,?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)")
 		->execute(['wake_proxy_secret', $newSecret, 'Token secreto para autenticar el Wake Proxy']);
@@ -645,6 +651,7 @@ case 'regenerate_wake_proxy_token':
 
 // ─────────────────────────────────────────────────────────────
 case 'clear_events':
+	if ($_SERVER['REQUEST_METHOD'] !== 'POST') { http_response_code(405); echo err('Method not allowed'); break; }
 	$pdo->exec("DELETE FROM events");
 	echo ok(null, 'Event log cleared');
 	break;
@@ -678,7 +685,8 @@ case 'update_setting':
 	            'ai_enabled','ai_provider','ai_model','ai_api_key',
 	            'ai_use_emojis','ai_highlight','ai_tone','ai_no_repeat','ai_extra_context','ai_language',
 	            'wake_proxy_splash_mode','wake_proxy_max_retries',
-	            'ups_webhook_token','ups_shutdown_delay_sec',
+		            'wp_local_only','wp_allowed_ranges','wp_blocked_ips','wp_block_bots','wp_blocked_ua',
+		            'ups_webhook_token','ups_shutdown_delay_sec',
             'kiosk_token'];
 	if (!in_array($key, $allowed)) {
 		echo err("Setting '$key' not allowed");
@@ -1216,12 +1224,13 @@ try {
 	$ok = stripos($out, 'Number of key(s) added') !== false
 	   || stripos($out, 'already exist') !== false
 	   || stripos($out, 'keys remain') !== false;
-	if (!$ok && !empty(trim($out))) {
-		// Si hay output sin señal de éxito, puede ser error real
+	if (!$ok) {
 		logEv($pdo, $srvId, 'warn', "authorize_wakelab_key output: " . substr($out, 0, 200));
+		echo err('SSH key copy failed: ' . trim($out));
+		break;
 	}
 
-	// Limpiar contraseña de settings (no la guardamos)
+	// Limpiar contraseña de settings (solo si la copia fue exitosa)
 	$del = $pdo->prepare("DELETE FROM settings WHERE `key`=?");
 	$del->execute(["srv_{$srvId}_ssh_pass"]);
 
@@ -2483,7 +2492,7 @@ case 'update_user':
 	if ($dup->fetch()) { echo err('Username or email already in use'); break; }
 
 	if ($passNew) {
-		if (strlen($passNew) < 6) { echo err('New password must be at least 6 characters'); break; }
+		if (strlen($passNew) < 8) { echo err('New password must be at least 8 characters'); break; }
 		$hash = password_hash($passNew, PASSWORD_DEFAULT);
 		$pdo->prepare("UPDATE usuarios SET usuario=?,email=?,contrasena=? WHERE id=?")
 		    ->execute([$newUsuario, $newEmail, $hash, $userId]);
@@ -2639,6 +2648,7 @@ case 'clean_idle_host':
 // ─────────────────────────────────────────────────────────────
 
 case 'generate_vapid':
+	if ($_SERVER['REQUEST_METHOD'] !== 'POST') { http_response_code(405); echo err('Method not allowed'); break; }
 	require_once __DIR__ . '/push.php';
 	$keys = WakePush::generateKeys();
 	$ins  = $pdo->prepare("INSERT INTO settings (`key`,`value`) VALUES (?,?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)");
