@@ -470,7 +470,8 @@ async function loadPushSettings() {
     const { enabled, vapid_ready, subscription_count } = r.data;
     const el = document.getElementById('push-enabled');
     if (el) el.checked = enabled;
-    if (!vapid_ready) {
+    if (!vapid_ready && !loadPushSettings._vapidRequested) {
+        loadPushSettings._vapidRequested = true;
         await fetch('php/api.php', { method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify({ action:'generate_vapid' }) });
     }
@@ -716,7 +717,7 @@ function _pushEvent(event, title, body, id, pendingAction) {
         body: JSON.stringify({
             action: 'send_push_event',
             event, title, body,
-            tag:            'server-' + id,
+            tag:            id != null ? 'server-' + id : 'batch-' + event,
             url:            './',
             server_id:      id,
             pending_action: pendingAction ?? null,
@@ -868,6 +869,8 @@ async function loadWakeSplashSettings() {
         if (retriesEl) retriesEl.value = retries;
         const tokenEl = document.getElementById('wp-token-val');
         if (tokenEl && cfg.wake_proxy_secret) tokenEl.textContent = cfg.wake_proxy_secret;
+        const wakeDelayEl = document.getElementById('ui-wake-delay');
+        if (wakeDelayEl) wakeDelayEl.value = cfg.wp_wake_delay_sec ?? '3';
 
         // Access control
         const localOnly = cfg.wp_local_only === '1';
@@ -886,12 +889,6 @@ async function loadWakeSplashSettings() {
         if (blockedUaEl) blockedUaEl.value = cfg.wp_blocked_ua || '';
         if (rangesSection) rangesSection.style.display = localOnly ? '' : 'none';
         if (uaSection) uaSection.style.display = blockBots ? '' : 'none';
-        if (lo) lo.addEventListener('change', () => {
-            if (rangesSection) rangesSection.style.display = lo.checked ? '' : 'none';
-        });
-        if (bb) bb.addEventListener('change', () => {
-            if (uaSection) uaSection.style.display = bb.checked ? '' : 'none';
-        });
     } catch(e) {}
 }
 
@@ -1122,12 +1119,13 @@ async function toggleNotifChannel(channel, enabled) {
 }
 
 function _updateNotifyEventsState() {
-    const globalOn  = document.getElementById('notif-global-toggle')?.checked ?? true;
-    const anyEnabled = globalOn && ['push-enabled','tg-enabled','email-enabled']
+    const globalOn   = document.getElementById('notif-global-toggle')?.checked ?? true;
+    const anyChannel = ['push-enabled','tg-enabled','email-enabled']
         .some(id => document.getElementById(id)?.checked);
+    const anyEnabled = globalOn && anyChannel;
     const card = document.getElementById('notif-events-card');
     if (!card) return;
-    card.style.opacity      = anyEnabled ? '' : '0.4';
+    card.style.opacity       = anyEnabled ? '' : '0.4';
     card.style.pointerEvents = anyEnabled ? '' : 'none';
     card.querySelectorAll('.nevt-input').forEach(el => el.disabled = !anyEnabled);
 }
@@ -1144,7 +1142,7 @@ async function loadNotifyEvents() {
 }
 
 async function saveNotifyEvents() {
-    const keys = ['server_down','server_up','schedule','idle','error','guest_unknown'];
+    const keys = ['server_down','server_up','schedule','idle','error','guest_unknown','wake_timeout'];
     const events = {};
     keys.forEach(k => { const el = document.getElementById('nevt-' + k); events[k] = el?.checked ?? true; });
     const r = await fetch('php/api.php', { method:'POST', headers:{'Content-Type':'application/json'},
@@ -1182,13 +1180,8 @@ async function saveNotifyGlobal(field, value) {
 function _applyNotifGlobalState(enabled) {
     const wrap = document.getElementById('notif-channels-wrap');
     if (wrap) {
-        wrap.style.opacity      = enabled ? '' : '0.4';
+        wrap.style.opacity       = enabled ? '' : '0.4';
         wrap.style.pointerEvents = enabled ? '' : 'none';
-    }
-    const evCard = document.getElementById('notif-events-card');
-    if (evCard) {
-        evCard.style.opacity      = enabled ? '' : '0.4';
-        evCard.style.pointerEvents = enabled ? '' : 'none';
     }
     _updateNotifyEventsState();
 }

@@ -5,7 +5,7 @@ $projectRoot = __DIR__;
 // ── Lock de proceso — previene ejecuciones simultáneas del cron ──
 $_runnerLock = fopen(sys_get_temp_dir() . '/wakelab-schedule-runner.lock', 'c');
 if (!$_runnerLock || !flock($_runnerLock, LOCK_EX | LOCK_NB)) {
-    echo '[' . gmdate('Y-m-d H:i:s') . '] [info] schedule-runner already running — exiting' . PHP_EOL;
+    echo '[' . date('Y-m-d H:i:s') . '] [info] schedule-runner already running — exiting' . PHP_EOL;
     exit(0);
 }
 
@@ -85,12 +85,12 @@ $nowTime = $now->format('H:i');   // HH:MM exacto — schedules siempre son :00 
 $dayMap  = ['Mon'=>'mon','Tue'=>'tue','Wed'=>'wed','Thu'=>'thu','Fri'=>'fri','Sat'=>'sat','Sun'=>'sun'];
 $todayKey = $dayMap[$now->format('D')] ?? '';
 
-echo '[' . gmdate('Y-m-d H:i:s') . '] [tick] runner OK — hora local: ' . $nowTime . PHP_EOL;
+echo '[' . date('Y-m-d H:i:s') . '] [tick] runner OK — hora local: ' . $nowTime . PHP_EOL;
 
 // ── Helpers ─────────────────────────────────────────────────
 
 function logEv(PDO $pdo, ?int $srvId, string $level, string $msg): void {
-	$ts = gmdate('Y-m-d H:i:s');
+	$ts = date('Y-m-d H:i:s');
 	echo "[$ts] [$level] $msg\n";
 	$pdo->prepare("INSERT INTO events (server_id,level,message,timestamp) VALUES (?,?,?,?)")->execute([$srvId,$level,$msg,$ts]);
 }

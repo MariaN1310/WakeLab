@@ -30,6 +30,9 @@ function wh_setPendingAction(PDO $pdo, int $srvId, string $action): void {
 
 header('Content-Type: application/json');
 
+$_tz = getSetting($pdo, 'timezone', 'UTC');
+date_default_timezone_set($_tz);
+
 function wh_ok(string $msg, array $data = []): void {
     echo json_encode(['status' => 'ok', 'message' => $msg] + $data);
     exit;
@@ -49,7 +52,7 @@ if ($webhookDebug) {
         ->execute(["Webhook UPS [debug] — method=" . $_SERVER['REQUEST_METHOD']
             . " token_header=" . $tokenPresent
             . " body=" . substr($rawDebug, 0, 400),
-            gmdate('Y-m-d H:i:s')]);
+            date('Y-m-d H:i:s')]);
 }
 
 // ── Auth ────────────────────────────────────────────────────
@@ -78,7 +81,7 @@ $upsName = trim($payload['ups_data']['ups_model'] ?? $payload['ups_name'] ?? 'un
 
 if ($event === 'test' || $payload['test'] ?? false) {
     $pdo->prepare("INSERT INTO events (server_id,level,message,timestamp) VALUES (NULL,'info',?,?)")
-        ->execute(["Webhook UPS — connection test OK (UPS: $upsName)", gmdate('Y-m-d H:i:s')]);
+        ->execute(["Webhook UPS — connection test OK (UPS: $upsName)", date('Y-m-d H:i:s')]);
     wh_ok('Test received successfully');
 }
 
@@ -88,7 +91,7 @@ if (!in_array($event, ['onbatt', 'online', 'lowbatt', 'shutdown'])) {
 
 // ── Helpers ─────────────────────────────────────────────────
 function wh_log(PDO $pdo, ?int $srvId, string $level, string $msg): void {
-    $ts = gmdate('Y-m-d H:i:s');
+    $ts = date('Y-m-d H:i:s');
     $pdo->prepare("INSERT INTO events (server_id,level,message,timestamp) VALUES (?,?,?,?)")
         ->execute([$srvId, $level, $msg, $ts]);
 }
@@ -309,7 +312,7 @@ $pdo->prepare(
     $upsName,
     json_encode($affectedLog),
     'processed',
-    gmdate('Y-m-d H:i:s'),
+    date('Y-m-d H:i:s'),
 ]);
 
 wh_ok("Event '$event' processed", ['affected' => count($affectedLog)]);

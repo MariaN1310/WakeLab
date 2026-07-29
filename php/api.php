@@ -105,7 +105,7 @@ function getSetting(PDO $pdo, string $key, string $default = ''): string {
 function logEv(PDO $pdo, ?int $srvId, string $level, string $msg): void {
 	try {
 		$pdo->prepare("INSERT INTO events (server_id,level,message,timestamp) VALUES (?,?,?,?)")
-			->execute([$srvId, $level, $msg, gmdate('Y-m-d H:i:s')]);
+			->execute([$srvId, $level, $msg, date('Y-m-d H:i:s')]);
 		// Podar solo cada 50 inserciones — evita COUNT(*) en cada log
 		if ((int)$pdo->lastInsertId() % 50 === 0) {
 			$retention = max(100, intval(getSetting($pdo, 'event_retention', '1000')));
@@ -632,6 +632,7 @@ case 'get_config':
 		'wake_proxy_splash_mode'    =>        getSetting($pdo, 'wake_proxy_splash_mode',    'detailed'),
 		'wake_proxy_max_retries'    =>        getSetting($pdo, 'wake_proxy_max_retries',    '3'),
 		'wake_proxy_secret'         =>        $wpSecret,
+		'wp_wake_delay_sec'         =>        getSetting($pdo, 'wp_wake_delay_sec',         '3'),
 		'wp_local_only'             =>        getSetting($pdo, 'wp_local_only',             '0'),
 		'wp_allowed_ranges'         =>        getSetting($pdo, 'wp_allowed_ranges',         '192.168.0.0/16,10.0.0.0/8,172.16.0.0/12'),
 		'wp_blocked_ips'            =>        getSetting($pdo, 'wp_blocked_ips',            ''),
@@ -685,7 +686,7 @@ case 'update_setting':
 	            'ai_enabled','ai_provider','ai_model','ai_api_key',
 	            'ai_use_emojis','ai_highlight','ai_tone','ai_no_repeat','ai_extra_context','ai_language',
 	            'wake_proxy_splash_mode','wake_proxy_max_retries',
-		            'wp_local_only','wp_allowed_ranges','wp_blocked_ips','wp_block_bots','wp_blocked_ua',
+		            'wp_wake_delay_sec','wp_local_only','wp_allowed_ranges','wp_blocked_ips','wp_block_bots','wp_blocked_ua',
 		            'ups_webhook_token','ups_shutdown_delay_sec',
             'kiosk_token'];
 	if (!in_array($key, $allowed)) {
@@ -2701,14 +2702,14 @@ case 'save_push_settings':
 	break;
 
 case 'get_notify_events':
-	$evtKeys = ['server_down','server_up','schedule','idle','error','guest_unknown'];
+	$evtKeys = ['server_down','server_up','schedule','idle','error','guest_unknown','wake_timeout'];
 	$evts    = [];
 	foreach ($evtKeys as $k) $evts[$k] = getSetting($pdo, "notify_event_$k", '1') === '1';
 	echo ok($evts);
 	break;
 
 case 'save_notify_events':
-	$evtKeys = ['server_down','server_up','schedule','idle','error','guest_unknown'];
+	$evtKeys = ['server_down','server_up','schedule','idle','error','guest_unknown','wake_timeout'];
 	$evts    = $data['events'] ?? [];
 	$ins2    = $pdo->prepare("INSERT INTO settings (`key`,`value`) VALUES (?,?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)");
 	foreach ($evtKeys as $k) $ins2->execute(["notify_event_$k", isset($evts[$k]) ? ($evts[$k] ? '1' : '0') : '1']);
@@ -3593,7 +3594,7 @@ case 'wake_proxy_retry':
 		}
 		$pdo->prepare("INSERT INTO events (server_id,level,message,timestamp) VALUES (?,?,?,?)")
 		    ->execute([(int)$proxy['server_id'], 'info',
-		              "Wake Proxy: reintento WoL para '{$proxy['name']}'", gmdate('Y-m-d H:i:s')]);
+		              "Wake Proxy: reintento WoL para '{$proxy['name']}'", date('Y-m-d H:i:s')]);
 	} elseif (!empty($proxy['guest_vmid'])) {
 		$tokS = $pdo->prepare("SELECT * FROM api_tokens WHERE server_id=?");
 		$tokS->execute([(int)$proxy['server_id']]);

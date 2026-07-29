@@ -2895,7 +2895,7 @@ location /_wl/ {
                                     </select>
                                 </div>
 
-                                <div class="push-evt-row" style="border-bottom:none">
+                                <div class="push-evt-row">
                                     <div class="push-evt-info">
                                         <span class="notif-evt-icon" style="color:#8b949e"><i class="bi bi-arrow-repeat"></i></span>
                                         <div>
@@ -2906,6 +2906,19 @@ location /_wl/ {
                                     <input type="number" class="form-control form-control-sm" id="ui-splash-retries"
                                            style="max-width:80px" min="1" max="10" value="3"
                                            onchange="saveWakeSplashRetries(this.value)">
+                                </div>
+
+                                <div class="push-evt-row" style="border-bottom:none">
+                                    <div class="push-evt-info">
+                                        <span class="notif-evt-icon" style="color:#8b949e"><i class="bi bi-hourglass-split"></i></span>
+                                        <div>
+                                            <span class="push-evt-label">Wake delay <span style="font-size:10px;color:var(--text-dim)">(seg)</span></span>
+                                            <div style="font-size:11px;color:var(--text-dim)">Seconds the splash waits before sending WoL — filters out health checks and bots that disconnect immediately</div>
+                                        </div>
+                                    </div>
+                                    <input type="number" class="form-control form-control-sm" id="ui-wake-delay"
+                                           style="max-width:80px" min="0" max="30" value="3"
+                                           onchange="saveWpSetting('wp_wake_delay_sec', this.value)">
                                 </div>
                             </div>
                         </div>
@@ -2940,7 +2953,7 @@ location /_wl/ {
                                     </div>
                                     <div class="form-check form-switch mb-0">
                                         <input class="form-check-input" type="checkbox" role="switch" id="wp-local-only"
-                                               onchange="saveWpSetting('wp_local_only', this.checked ? '1' : '0')">
+                                               onchange="saveWpSetting('wp_local_only', this.checked ? '1' : '0');document.getElementById('wp-ranges-section').style.display=this.checked?'':'none'">
                                     </div>
                                 </div>
 
@@ -2962,7 +2975,7 @@ location /_wl/ {
                                     </div>
                                     <div class="form-check form-switch mb-0">
                                         <input class="form-check-input" type="checkbox" role="switch" id="wp-block-bots"
-                                               onchange="saveWpSetting('wp_block_bots', this.checked ? '1' : '0')">
+                                               onchange="saveWpSetting('wp_block_bots', this.checked ? '1' : '0');document.getElementById('wp-ua-section').style.display=this.checked?'':'none'">
                                     </div>
                                 </div>
 

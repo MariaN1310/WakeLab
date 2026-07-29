@@ -293,7 +293,7 @@ function triggerWake(PDO $pdo, array $proxy): void {
 function logWakeProxy(PDO $pdo, ?int $srvId, string $level, string $msg): void {
     try {
         $pdo->prepare("INSERT INTO events (server_id,level,message,timestamp) VALUES (?,?,?,?)")
-            ->execute([$srvId, $level, $msg, gmdate('Y-m-d H:i:s')]);
+            ->execute([$srvId, $level, $msg, date('Y-m-d H:i:s')]);
     } catch (Throwable $e) {}
 }
 
@@ -333,31 +333,12 @@ if (!$proxy) {
 
 // Proxy inactivo → pass-through directo sin wake ni splash
 if (!$proxy['active']) {
-    $scheme  = $_SERVER['HTTP_X_FORWARDED_PROTO']
-             ?? ((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http');
-    $selfHost = $_SERVER['HTTP_HOST'] ?? $proxy['domain'];
-    // Redirigimos al mismo dominio para que Nginx siga haciendo proxy al destino real.
-    // El servicio puede estar offline, pero no es responsabilidad de WakeLab en este caso.
-    $uri = (function(): string {
-        $raw   = $_SERVER['HTTP_X_ORIGINAL_URI'] ?? $_SERVER['REQUEST_URI'] ?? '/';
-        $parts = parse_url($raw);
-        $u     = $parts['path'] ?? '/';
-        if (!empty($parts['query']))    $u .= '?' . $parts['query'];
-        if (!empty($parts['fragment'])) $u .= '#' . $parts['fragment'];
-        return '/' . ltrim($u, '/');
-    })();
-    // Si el destino está online, redirigir directo; si no, pasar sin splash
-    $destUp = (bool)@fsockopen($proxy['dest_ip'], (int)$proxy['dest_port'], $e, $es, 2);
-    if ($destUp) {
-        header('Location: ' . $scheme . '://' . $selfHost . $uri, true, 302);
-    } else {
-        // Servicio offline y proxy desactivado: devolver 503 limpio sin splash
-        http_response_code(503);
-        echo '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Servicio no disponible</title></head>'
-           . '<body style="font-family:system-ui;padding:2rem;background:#0d1117;color:#c9d1d9;text-align:center">'
-           . '<p style="margin-top:4rem;color:#8b949e">' . htmlspecialchars($proxy['name']) . ' no está disponible.</p>'
-           . '</body></html>';
-    }
+    // Proxy desactivado — nunca despertar, nunca redirigir. 503 y listo.
+    http_response_code(503);
+    echo '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Servicio no disponible</title></head>'
+       . '<body style="font-family:system-ui;padding:2rem;background:#0d1117;color:#c9d1d9;text-align:center">'
+       . '<p style="margin-top:4rem;color:#8b949e">' . htmlspecialchars($proxy['name']) . ' no está disponible.</p>'
+       . '</body></html>';
     exit;
 }
 
@@ -430,9 +411,8 @@ if ($timedOut) {
     curl_close($ch);
 }
 
-if (tryAcquireLock($proxyId, $lockTime)) {
-    triggerWake($pdo, $proxy);
-}
+// WoL is NOT triggered here — the splash JS waits wp_wake_delay_sec seconds
+// before calling wake_proxy_retry, so health checks that disconnect immediately never wake anything.
 
 // Build splash
 $name        = htmlspecialchars($proxy['name']);
@@ -443,6 +423,7 @@ $timeout     = (int)$proxy['boot_timeout_sec'];
 $guestLabel  = ($proxy['guest_vmtype'] ?? 'qemu') === 'lxc' ? 'LXC' : 'VM';
 $splashMode  = getSplashSetting($pdo, 'wake_proxy_splash_mode', 'detailed');
 $maxRetries  = (int)getSplashSetting($pdo, 'wake_proxy_max_retries', '3');
+$wakeDelay   = max(0, (int)getSplashSetting($pdo, 'wp_wake_delay_sec', '3'));
 
 $steps = [['label' => 'Enviando señal de encendido al host', 'phase' => 'wol_sent']];
 $steps[] = ['label' => 'Esperando boot del host',   'phase' => 'host_online'];
@@ -546,6 +527,7 @@ body{background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFo
 const PROXY_ID    = <?= $proxyId ?>;
 const TIMEOUT_MS  = <?= $timeout * 1000 ?>;
 const MAX_RETRIES = <?= $maxRetries ?>;
+const WAKE_DELAY  = <?= $wakeDelay * 1000 ?>;
 const API_BASE    = <?= json_encode($apiBase) ?>;
 const STEPS       = <?= $stepsJson ?>;
 const REDIRECT_URI = <?= json_encode(resolveOriginalUri()) ?>;
@@ -688,10 +670,16 @@ if (SPLASH_MODE === 'detailed') {
     }
 }
 
-// Init
+// Init — wait WAKE_DELAY ms before triggering WoL so health checks that
+// disconnect immediately never wake anything. Only a real browser waiting on
+// the splash page will reach the doRetry() call.
 if (SPLASH_MODE === 'detailed') renderSteps('wol_sent');
-setStatus(MSG['wol_sent']);
-setTimeout(poll, 5000);
+setStatus('Verificando acceso...');
+setTimeout(async () => {
+    setStatus(MSG['wol_sent']);
+    await doRetry();
+    setTimeout(poll, 3000);
+}, WAKE_DELAY);
 </script>
 </body>
 </html>
