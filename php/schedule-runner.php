@@ -5,7 +5,7 @@ $projectRoot = __DIR__;
 // ── Lock de proceso — previene ejecuciones simultáneas del cron ──
 $_runnerLock = fopen(sys_get_temp_dir() . '/wakelab-schedule-runner.lock', 'c');
 if (!$_runnerLock || !flock($_runnerLock, LOCK_EX | LOCK_NB)) {
-    echo '[' . date('Y-m-d H:i:s') . '] [info] schedule-runner already running — exiting' . PHP_EOL;
+    echo '[' . gmdate('Y-m-d H:i:s') . '] [info] schedule-runner already running — exiting' . PHP_EOL;
     exit(0);
 }
 
@@ -68,29 +68,27 @@ function releaseLock(PDO $pdo, int $srvId): void {
     $pdo->prepare("DELETE FROM settings WHERE `key`=?")->execute(['lock_' . $srvId]);
 }
 
-// TZ: env var tiene prioridad; fallback a DB settings; fallback a UTC
-$tzEnv = getenv('TZ');
-if (!$tzEnv) {
-    try {
-        $tzRow = $pdo->prepare("SELECT `value` FROM settings WHERE `key`='timezone'");
-        $tzRow->execute();
-        $tzDb = (string)($tzRow->fetchColumn() ?: '');
-        if ($tzDb) $tzEnv = $tzDb;
-    } catch (Throwable) {}
-}
-if ($tzEnv) date_default_timezone_set($tzEnv);
-$tz = new DateTimeZone($tzEnv ?: date_default_timezone_get() ?: 'UTC');
+// TZ: DB tiene prioridad sobre env var (env var del container puede ser UTC aunque el usuario configure otra)
+$tzFinal = '';
+try {
+    $tzRow = $pdo->prepare("SELECT `value` FROM settings WHERE `key`='timezone'");
+    $tzRow->execute();
+    $tzFinal = (string)($tzRow->fetchColumn() ?: '');
+} catch (Throwable) {}
+if (!$tzFinal) $tzFinal = getenv('TZ') ?: 'UTC';
+date_default_timezone_set($tzFinal);
+$tz = new DateTimeZone($tzFinal);
 $now     = new DateTime('now', $tz);
 $nowTime = $now->format('H:i');   // HH:MM exacto — schedules siempre son :00 o :30
 $dayMap  = ['Mon'=>'mon','Tue'=>'tue','Wed'=>'wed','Thu'=>'thu','Fri'=>'fri','Sat'=>'sat','Sun'=>'sun'];
 $todayKey = $dayMap[$now->format('D')] ?? '';
 
-echo '[' . date('Y-m-d H:i:s') . '] [tick] runner OK — hora local: ' . $nowTime . PHP_EOL;
+echo '[' . gmdate('Y-m-d H:i:s') . '] [tick] runner OK — hora local: ' . $nowTime . PHP_EOL;
 
 // ── Helpers ─────────────────────────────────────────────────
 
 function logEv(PDO $pdo, ?int $srvId, string $level, string $msg): void {
-	$ts = date('Y-m-d H:i:s');
+	$ts = gmdate('Y-m-d H:i:s');
 	echo "[$ts] [$level] $msg\n";
 	$pdo->prepare("INSERT INTO events (server_id,level,message,timestamp) VALUES (?,?,?,?)")->execute([$srvId,$level,$msg,$ts]);
 }
@@ -442,21 +440,88 @@ if ($upsState === 'onbatt' && $delaySec > 0 && $onbattSince > 0 && count($pendin
         // Ordenar por prioridad
         usort($pendingHosts, fn($a, $b) => ($a['priority'] ?? 10) <=> ($b['priority'] ?? 10));
 
+        set_time_limit(0); // el proceso puede tardar varios minutos esperando guests
+
         foreach ($pendingHosts as $ph) {
             $srvRow = $pdo->prepare("SELECT * FROM servers WHERE id=?");
             $srvRow->execute([$ph['id']]);
             $srv = $srvRow->fetch();
             if (!$srv) continue;
 
-            // Verificar si sigue online (puede que ya se haya apagado solo)
             if (!pingHost($srv['ip'])) {
                 logEv($pdo, $srv['id'], 'info', "{$srv['hostname']}: already offline, no action");
                 continue;
             }
 
-            // Marcar pending action para que el frontend lo muestre como apagado por UPS
             setPendingAction($pdo, $srv['id'], 'ups_shutdown_timer');
 
+            // PVE host (no es VM): apagar LXC → VMs → host en orden
+            $isPveHost = ($srv['hypervisor_type'] === 'pve') && !intval($srv['proxmox_vmid'] ?? 0);
+            if ($isPveHost) {
+                $tok = $pdo->prepare("SELECT * FROM api_tokens WHERE server_id=?");
+                $tok->execute([$srv['id']]);
+                $t = $tok->fetch();
+
+                if ($t && !empty($t['token_secret'])) {
+                    require_once __DIR__ . '/pve.php';
+                    $pve = new PVEClient(
+                        $srv['ip'], intval($srv['port']),
+                        $t['api_user'], $t['token_id'], wlDecrypt($t['token_secret'])
+                    );
+
+                    $allGuests = $pve->getGuests();
+
+                    // Separar LXC y VMs que están corriendo
+                    $lxcRunning = array_values(array_filter($allGuests,
+                        fn($g) => ($g['type'] ?? '') === 'lxc' && ($g['status'] ?? '') === 'running'));
+                    $vmRunning  = array_values(array_filter($allGuests,
+                        fn($g) => ($g['type'] ?? '') === 'vm'  && ($g['status'] ?? '') === 'running'));
+
+                    // 1. Apagar LXC
+                    foreach ($lxcRunning as $g) {
+                        logEv($pdo, $srv['id'], 'warn',
+                            "{$srv['hostname']}: UPS — shutting down LXC {$g['vmid']} ({$g['name']})");
+                        $pve->shutdownGuest(intval($g['vmid']), 'lxc', $g['node'] ?? '');
+                    }
+                    // Esperar LXC (máx 60s)
+                    if (!empty($lxcRunning)) {
+                        $deadline = time() + 60;
+                        while (time() < $deadline) {
+                            sleep(4);
+                            $pending = array_filter($lxcRunning,
+                                fn($g) => $pve->getGuestStatus(intval($g['vmid'])) !== 'stopped');
+                            if (empty($pending)) break;
+                        }
+                        logEv($pdo, $srv['id'], 'info', "{$srv['hostname']}: LXC containers stopped");
+                    }
+
+                    // 2. Apagar VMs (qemu)
+                    foreach ($vmRunning as $g) {
+                        logEv($pdo, $srv['id'], 'warn',
+                            "{$srv['hostname']}: UPS — shutting down VM {$g['vmid']} ({$g['name']})");
+                        $pve->shutdownGuest(intval($g['vmid']), 'qemu', $g['node'] ?? '');
+                    }
+                    // Esperar VMs (máx 120s — TrueNAS puede tardar)
+                    if (!empty($vmRunning)) {
+                        $deadline = time() + 120;
+                        while (time() < $deadline) {
+                            sleep(4);
+                            $pending = array_filter($vmRunning,
+                                fn($g) => $pve->getGuestStatus(intval($g['vmid'])) !== 'stopped');
+                            if (empty($pending)) break;
+                        }
+                        logEv($pdo, $srv['id'], 'info', "{$srv['hostname']}: VMs stopped");
+                    }
+
+                    logEv($pdo, $srv['id'], 'warn',
+                        "{$srv['hostname']}: all guests down — sending SSH shutdown to PVE host");
+                } else {
+                    logEv($pdo, $srv['id'], 'warn',
+                        "{$srv['hostname']}: no API token configured — shutting down PVE host directly");
+                }
+            }
+
+            // SSH shutdown al host (PVE o cualquier otro tipo)
             $out   = sshShutdown($pdo, $srv['id'], $srv['ip']);
             $sshOk = trim($out) === '' || (!str_contains(strtolower($out), 'error') && !str_contains(strtolower($out), 'denied'));
             logEv($pdo, $srv['id'], $sshOk ? 'warn' : 'err',
@@ -466,6 +531,55 @@ if ($upsState === 'onbatt' && $delaySec > 0 && $onbattSince > 0 && count($pendin
         // Limpiar hosts pendientes — ya procesados
         $pdo->prepare("INSERT INTO settings (`key`,`value`) VALUES ('ups_pending_hosts','[]') ON DUPLICATE KEY UPDATE `value`='[]'")->execute();
     }
+}
+
+// ══════════════════════════════════════════════════════════════
+// UPS — reintentar WoL para servidores que no volvieron online
+// ══════════════════════════════════════════════════════════════
+try {
+    $wolPendingRaw = getSettingVal($pdo, 'ups_wol_pending', '[]');
+    $wolPending    = json_decode($wolPendingRaw, true) ?: [];
+} catch (Throwable) { $wolPending = []; }
+
+if (!empty($wolPending)) {
+    $now       = time();
+    $remaining = [];
+
+    foreach ($wolPending as $entry) {
+        $srvId    = intval($entry['id']);
+        $hostname = $entry['hostname'] ?? '?';
+        $mac      = $entry['mac']      ?? '';
+        $deadline = intval($entry['deadline'] ?? 0);
+
+        if ($now > $deadline) {
+            logEv($pdo, $srvId, 'warn', "$hostname: UPS WoL retry timeout — server did not come back online");
+            continue;
+        }
+
+        $srvRow = $pdo->prepare("SELECT ip FROM servers WHERE id=?");
+        $srvRow->execute([$srvId]);
+        $ip = (string)($srvRow->fetchColumn() ?: '');
+
+        if ($ip && pingHost($ip)) {
+            logEv($pdo, $srvId, 'ok', "$hostname: back online after UPS power restored");
+            continue; // no reencolar — ya está online
+        }
+
+        // Servidor todavía offline — reenviar WoL
+        $macs = array_values(array_filter(
+            array_map(fn($m) => str_replace([':', '-'], '', trim($m)), explode(',', $mac)),
+            fn($m) => strlen($m) === 12
+        ));
+        $ok = false;
+        foreach ($macs as $m) {
+            if (sendWOL($m)) $ok = true;
+        }
+        logEv($pdo, $srvId, $ok ? 'info' : 'err', "$hostname: UPS WoL retry — " . ($ok ? 'sent' : 'error'));
+        $remaining[] = $entry;
+    }
+
+    $pdo->prepare("INSERT INTO settings (`key`,`value`) VALUES ('ups_wol_pending',?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)")
+        ->execute([json_encode($remaining)]);
 }
 
 ?>

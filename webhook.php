@@ -7,6 +7,7 @@
 
 require_once __DIR__ . '/php/config.php';
 require_once __DIR__ . '/php/db.php';
+require_once __DIR__ . '/php/notify.php';
 
 if (!function_exists('getSetting')) {
     function getSetting(PDO $pdo, string $key, string $default = ''): string {
@@ -52,7 +53,7 @@ if ($webhookDebug) {
         ->execute(["Webhook UPS [debug] — method=" . $_SERVER['REQUEST_METHOD']
             . " token_header=" . $tokenPresent
             . " body=" . substr($rawDebug, 0, 400),
-            date('Y-m-d H:i:s')]);
+            gmdate('Y-m-d H:i:s')]);
 }
 
 // ── Auth ────────────────────────────────────────────────────
@@ -79,9 +80,9 @@ $payload = json_decode($rawDebug, true);
 $event   = strtolower(trim($payload['event_type'] ?? $payload['event'] ?? ''));
 $upsName = trim($payload['ups_data']['ups_model'] ?? $payload['ups_name'] ?? 'unknown');
 
-if ($event === 'test' || $payload['test'] ?? false) {
+if ($event === 'test' || ($payload['test'] ?? false)) {
     $pdo->prepare("INSERT INTO events (server_id,level,message,timestamp) VALUES (NULL,'info',?,?)")
-        ->execute(["Webhook UPS — connection test OK (UPS: $upsName)", date('Y-m-d H:i:s')]);
+        ->execute(["Webhook UPS — connection test OK (UPS: $upsName)", gmdate('Y-m-d H:i:s')]);
     wh_ok('Test received successfully');
 }
 
@@ -91,7 +92,7 @@ if (!in_array($event, ['onbatt', 'online', 'lowbatt', 'shutdown'])) {
 
 // ── Helpers ─────────────────────────────────────────────────
 function wh_log(PDO $pdo, ?int $srvId, string $level, string $msg): void {
-    $ts = date('Y-m-d H:i:s');
+    $ts = gmdate('Y-m-d H:i:s');
     $pdo->prepare("INSERT INTO events (server_id,level,message,timestamp) VALUES (?,?,?,?)")
         ->execute([$srvId, $level, $msg, $ts]);
 }
@@ -174,6 +175,7 @@ function wh_shutdownServer(PDO $pdo, array $srv, string $reason): string {
     $proxmoxVmid  = intval($srv['proxmox_vmid']      ?? 0);
     $proxmoxSrvId = intval($srv['proxmox_server_id'] ?? 0);
 
+    // Servidor es una VM/LXC gestionada por otro PVE — apagar via API del host PVE
     if ($proxmoxVmid && $proxmoxSrvId) {
         require_once __DIR__ . '/php/pve.php';
         $tok = $pdo->prepare("SELECT * FROM api_tokens WHERE server_id=?");
@@ -188,6 +190,60 @@ function wh_shutdownServer(PDO $pdo, array $srv, string $reason): string {
             $msg = $ok ? "$hostname: shutdown via Proxmox API ($reason)" : "$hostname: Proxmox API error, trying SSH";
             wh_log($pdo, $srvId, $ok ? 'warn' : 'info', $msg);
             if ($ok) return 'proxmox';
+        }
+    }
+
+    // Servidor es un host PVE — apagar guests ordenado (LXC → VMs) antes de apagar el host
+    $isPveHost = ($srv['hypervisor_type'] ?? '') === 'pve' && !$proxmoxVmid;
+    if ($isPveHost) {
+        require_once __DIR__ . '/php/pve.php';
+        $tok = $pdo->prepare("SELECT * FROM api_tokens WHERE server_id=?");
+        $tok->execute([$srvId]);
+        $t = $tok->fetch();
+        if ($t && !empty($t['token_secret'])) {
+            $pve       = new PVEClient($ip, intval($srv['port'] ?? 8006), $t['api_user'], $t['token_id'], wlDecrypt($t['token_secret']));
+            $allGuests = $pve->getGuests();
+
+            $lxcRunning = array_values(array_filter($allGuests,
+                fn($g) => ($g['type'] ?? '') === 'lxc' && ($g['status'] ?? '') === 'running'));
+            $vmRunning  = array_values(array_filter($allGuests,
+                fn($g) => ($g['type'] ?? '') === 'vm'  && ($g['status'] ?? '') === 'running'));
+
+            set_time_limit(0);
+
+            // 1. Apagar LXC
+            foreach ($lxcRunning as $g) {
+                wh_log($pdo, $srvId, 'warn', "$hostname: UPS — shutting down LXC {$g['vmid']} ({$g['name']})");
+                $pve->shutdownGuest(intval($g['vmid']), 'lxc', $g['node'] ?? '');
+            }
+            if (!empty($lxcRunning)) {
+                $deadline = time() + 60;
+                while (time() < $deadline) {
+                    sleep(4);
+                    $still = array_filter($lxcRunning, fn($g) => $pve->getGuestStatus(intval($g['vmid'])) !== 'stopped');
+                    if (empty($still)) break;
+                }
+                wh_log($pdo, $srvId, 'info', "$hostname: LXC containers stopped");
+            }
+
+            // 2. Apagar VMs
+            foreach ($vmRunning as $g) {
+                wh_log($pdo, $srvId, 'warn', "$hostname: UPS — shutting down VM {$g['vmid']} ({$g['name']})");
+                $pve->shutdownGuest(intval($g['vmid']), 'qemu', $g['node'] ?? '');
+            }
+            if (!empty($vmRunning)) {
+                $deadline = time() + 120;
+                while (time() < $deadline) {
+                    sleep(4);
+                    $still = array_filter($vmRunning, fn($g) => $pve->getGuestStatus(intval($g['vmid'])) !== 'stopped');
+                    if (empty($still)) break;
+                }
+                wh_log($pdo, $srvId, 'info', "$hostname: VMs stopped");
+            }
+
+            wh_log($pdo, $srvId, 'warn', "$hostname: all guests down — sending SSH shutdown to PVE host");
+        } else {
+            wh_log($pdo, $srvId, 'warn', "$hostname: no PVE API token — shutting down host directly via SSH");
         }
     }
 
@@ -282,6 +338,7 @@ switch ($event) {
         wh_setSetting($pdo, 'ups_pending_hosts', '[]');
         wh_setSetting($pdo, 'ups_onbatt_since', '');
 
+        $wolRetryList = [];
         foreach ($upsManagedServers as $srv) {
             if ($srv['ups_last_state'] !== 'online') continue;
             $mac  = $srv['mac'] ?? '';
@@ -293,9 +350,21 @@ switch ($event) {
             foreach ($macs as $m) {
                 if (wh_sendWOL($m)) $ok = true;
             }
+            if ($ok) {
+                wh_setPendingAction($pdo, $srv['id'], 'wake');
+                $wolRetryList[] = [
+                    'id'       => $srv['id'],
+                    'hostname' => $srv['hostname'],
+                    'mac'      => $mac,
+                    'deadline' => time() + 600, // reintentar hasta 10 minutos
+                ];
+            }
             wh_log($pdo, $srv['id'], $ok ? 'ok' : 'err',
                 $ok ? "{$srv['hostname']}: WoL sent (UPS online)" : "{$srv['hostname']}: error sending WoL");
             $affectedLog[] = ['hostname' => $srv['hostname'], 'result' => $ok ? 'wol_sent' : 'error'];
+        }
+        if (!empty($wolRetryList)) {
+            wh_setSetting($pdo, 'ups_wol_pending', json_encode($wolRetryList));
         }
         break;
 
@@ -312,7 +381,26 @@ $pdo->prepare(
     $upsName,
     json_encode($affectedLog),
     'processed',
-    date('Y-m-d H:i:s'),
+    gmdate('Y-m-d H:i:s'),
 ]);
+
+// ── Notificaciones (Telegram, Push) ─────────────────────────
+$notifMap = [
+    'onbatt'   => ['⚡ UPS on battery',        "Power lost — UPS running on battery. Shutdown sequence initiated for managed servers."],
+    'lowbatt'  => ['🔴 UPS low battery',       "Battery critical — immediate shutdown of all managed servers."],
+    'online'   => ['🟢 UPS power restored',    "Power restored — waking managed servers."],
+    'shutdown' => ['⚠️ UPS shutdown signal',   "UPS sent shutdown signal."],
+];
+if (isset($notifMap[$event])) {
+    [$notifTitle, $notifBody] = $notifMap[$event];
+    $hostList = array_column($affectedLog, 'hostname');
+    if (!empty($hostList)) $notifBody .= ' (' . implode(', ', $hostList) . ')';
+    WakeNotify::notifyAll($pdo, [
+        'title' => $notifTitle,
+        'body'  => $notifBody,
+        'tag'   => 'ups-' . $event,
+        'url'   => './',
+    ], 'ups');
+}
 
 wh_ok("Event '$event' processed", ['affected' => count($affectedLog)]);

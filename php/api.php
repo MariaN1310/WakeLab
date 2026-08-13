@@ -40,7 +40,7 @@ if (in_array($action, INTERNAL_ACTIONS, true)) {
     }
 } elseif (!in_array($action, PUBLIC_ACTIONS, true) && !tryRestoreSession()) {
     // Kiosk token auth — permite acciones de rack sin sesión
-    $kioskActions = ['get_status', 'server_action', 'set_schedule_active', 'set_shutdown_active', 'set_idle_active'];
+    $kioskActions = ['get_status', 'server_action', 'set_schedule_active', 'set_shutdown_active', 'set_idle_active', 'ups_battery_status'];
     if (in_array($action, $kioskActions, true)) {
         $kioskHeader = $_SERVER['HTTP_X_KIOSK_TOKEN'] ?? '';
         if ($kioskHeader !== '') {
@@ -105,7 +105,7 @@ function getSetting(PDO $pdo, string $key, string $default = ''): string {
 function logEv(PDO $pdo, ?int $srvId, string $level, string $msg): void {
 	try {
 		$pdo->prepare("INSERT INTO events (server_id,level,message,timestamp) VALUES (?,?,?,?)")
-			->execute([$srvId, $level, $msg, date('Y-m-d H:i:s')]);
+			->execute([$srvId, $level, $msg, gmdate('Y-m-d H:i:s')]);
 		// Podar solo cada 50 inserciones — evita COUNT(*) en cada log
 		if ((int)$pdo->lastInsertId() % 50 === 0) {
 			$retention = max(100, intval(getSetting($pdo, 'event_retention', '1000')));
@@ -638,6 +638,8 @@ case 'get_config':
 		'wp_blocked_ips'            =>        getSetting($pdo, 'wp_blocked_ips',            ''),
 		'wp_block_bots'             =>        getSetting($pdo, 'wp_block_bots',             '0'),
 		'wp_blocked_ua'             =>        getSetting($pdo, 'wp_blocked_ua',             ''),
+		'timezone'                  =>        getSetting($pdo, 'timezone',                   ''),
+		'timezone_display'          =>        getSetting($pdo, 'timezone_display',           ''),
 	]);
 	break;
 
@@ -687,7 +689,8 @@ case 'update_setting':
 	            'ai_use_emojis','ai_highlight','ai_tone','ai_no_repeat','ai_extra_context','ai_language',
 	            'wake_proxy_splash_mode','wake_proxy_max_retries',
 		            'wp_wake_delay_sec','wp_local_only','wp_allowed_ranges','wp_blocked_ips','wp_block_bots','wp_blocked_ua',
-		            'ups_webhook_token','ups_shutdown_delay_sec',
+		            'ups_webhook_token','ups_shutdown_delay_sec','ups_poll_interval_sec',
+		            'nut_last_pve_id','nut_last_vmid','nut_last_ups_name',
             'kiosk_token'];
 	if (!in_array($key, $allowed)) {
 		echo err("Setting '$key' not allowed");
@@ -720,6 +723,164 @@ case 'get_ups_events':
 		echo ok([]);
 	}
 	break;
+
+// ─────────────────────────────────────────────────────────────
+case 'nut_detect': {
+	$pveId = intval($data['pve_server_id'] ?? 0);
+	$vmid  = intval($data['vmid']          ?? 0);
+	if (!$pveId || !$vmid) { echo err('pve_server_id and vmid required'); break; }
+	$srvR = $pdo->prepare('SELECT ip FROM servers WHERE id=?');
+	$srvR->execute([$pveId]);
+	$srvRow = $srvR->fetch();
+	if (!$srvRow) { echo err('PVE server not found'); break; }
+	$ip = $srvRow['ip'];
+	if (!isSafeHost($ip)) { echo err('Invalid server IP'); break; }
+	$keyOpt  = file_exists('/var/www/.ssh/id_ed25519') ? '-i /var/www/.ssh/id_ed25519' : '';
+	$sshOpts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 -o BatchMode=yes $keyOpt";
+	$sshCmd  = sprintf('ssh %s root@%s %s 2>&1', $sshOpts, escapeshellarg($ip),
+	               escapeshellarg('pct exec ' . (int)$vmid . ' -- upsc -l 2>&1'));
+	$raw = (string)shell_exec($sshCmd);
+	$raw = trim(preg_replace('/^(?:Warning:|Init SSL)[^\n]*\n?/m', '', $raw));
+	if ($raw === '') { echo err('No response — check SSH key and that the LXC is running'); break; }
+	if (str_contains($raw, 'Permission denied') || str_contains($raw, 'Connection refused')) {
+		echo err('SSH error: ' . $raw); break;
+	}
+	// Filter SSH warnings: valid NUT UPS names contain only word chars, digits, hyphens
+	$list = array_values(array_filter(array_map('trim', explode("\n", $raw)),
+	    fn($l) => $l !== '' && preg_match('/^[\w][\w\-\.]*$/', $l)));
+	if (empty($list)) { echo err('No UPS devices found in container ' . $vmid); break; }
+	echo ok(['ups_list' => $list]);
+	break;
+}
+
+// ─────────────────────────────────────────────────────────────
+case 'nut_configure': {
+	$pveId   = intval($data['pve_server_id'] ?? 0);
+	$vmid    = intval($data['vmid']          ?? 0);
+	$upsName = trim($data['ups_name']        ?? '');
+	if (!$pveId || !$vmid || $upsName === '') { echo err('pve_server_id, vmid and ups_name required'); break; }
+	$srvR = $pdo->prepare('SELECT ip FROM servers WHERE id=?');
+	$srvR->execute([$pveId]);
+	$srvRow = $srvR->fetch();
+	if (!$srvRow) { echo err('PVE server not found'); break; }
+	$ip = $srvRow['ip'];
+	if (!isSafeHost($ip)) { echo err('Invalid server IP'); break; }
+
+	$webhookUrl   = rtrim(getSetting($pdo, 'wakelab_base_url', ''), '/') . '/webhook.php';
+	$webhookToken = getSetting($pdo, 'ups_webhook_token', '');
+	$keyOpt  = file_exists('/var/www/.ssh/id_ed25519') ? '-i /var/www/.ssh/id_ed25519' : '';
+	$sshOpts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 -o BatchMode=yes $keyOpt";
+
+	// Closure to run a command inside the LXC via SSH+pct
+	$pctExec = function(string $cmd) use ($sshOpts, $ip, $vmid): string {
+		$remote = 'pct exec ' . (int)$vmid . ' -- sh -c ' . escapeshellarg($cmd);
+		$out = (string)shell_exec(sprintf('ssh %s root@%s %s 2>&1', $sshOpts, escapeshellarg($ip), escapeshellarg($remote)));
+		// Strip SSH host-key warnings that prefix real output
+		$out = preg_replace('/^(?:Warning:|Init SSL)[^\n]*\n?/m', '', $out);
+		return trim($out);
+	};
+
+	$steps = [];
+
+	// Step 1: NUT installed
+	$out = $pctExec('which upsc');
+	$steps[] = ['ok' => str_contains($out, '/'), 'label' => 'NUT installed', 'detail' => $out ?: 'upsc not found'];
+	if (!$steps[0]['ok']) { echo ok(['steps' => $steps]); break; }
+
+	// Step 2: curl available
+	$out = $pctExec('which curl');
+	$steps[] = ['ok' => str_contains($out, '/'), 'label' => 'curl available', 'detail' => $out ?: 'curl not found — install it: apt install curl'];
+	if (!$steps[1]['ok']) { echo ok(['steps' => $steps]); break; }
+
+	// Step 3: write notify script (single-line curl, no backslash continuation)
+	$scriptPath = '/usr/local/bin/wakelab-notify';
+	$curlArgs   = '-s -X POST ' . escapeshellarg($webhookUrl)
+	            . ' -H ' . escapeshellarg('Content-Type: application/json')
+	            . ' -H ' . escapeshellarg('Authorization: Bearer ' . $webhookToken)
+	            . ' -H ' . escapeshellarg('X-Webhook-Token: ' . $webhookToken)
+	            . ' -d "{\"event_type\":\"$NOTIFYTYPE\",\"ups_name\":\"$UPSNAME\"}"';
+	$scriptBody = "#!/bin/sh\ncurl " . $curlArgs . " >/dev/null 2>&1\n";
+	$writeCmd   = 'printf %s ' . escapeshellarg($scriptBody) . ' > ' . escapeshellarg($scriptPath)
+	            . ' && chmod +x ' . escapeshellarg($scriptPath)
+	            . ' && test -x ' . escapeshellarg($scriptPath) . ' && echo OK';
+	$out = $pctExec($writeCmd);
+	$steps[] = ['ok' => str_contains($out, 'OK'), 'label' => 'Notify script written', 'detail' => str_contains($out, 'OK') ? $scriptPath : $out];
+
+	// Step 4: configure upsmon.conf
+	$upsmonConf = '/etc/nut/upsmon.conf';
+	$confExists = $pctExec('test -f /etc/nut/upsmon.conf && echo EXISTS');
+	if (!str_contains($confExists, 'EXISTS')) {
+		$steps[] = ['ok' => false, 'label' => 'upsmon.conf not found', 'detail' => 'Is nut-client installed in the container?'];
+		echo ok(['steps' => $steps]); break;
+	}
+	$sedOut = $pctExec('sed -i "/^NOTIFYCMD/d;/^NOTIFYFLAG/d" /etc/nut/upsmon.conf');
+	$pctExec('echo "NOTIFYCMD ' . $scriptPath . '" >> /etc/nut/upsmon.conf');
+	$pctExec('echo "NOTIFYFLAG ONBATT   SYSLOG+WALL+EXEC" >> /etc/nut/upsmon.conf');
+	$pctExec('echo "NOTIFYFLAG ONLINE   SYSLOG+WALL+EXEC" >> /etc/nut/upsmon.conf');
+	$pctExec('echo "NOTIFYFLAG LOWBATT  SYSLOG+WALL+EXEC" >> /etc/nut/upsmon.conf');
+	$pctExec('echo "NOTIFYFLAG SHUTDOWN SYSLOG+WALL+EXEC" >> /etc/nut/upsmon.conf');
+	$verify  = $pctExec('grep -c NOTIFYCMD /etc/nut/upsmon.conf');
+	$grepOut = $pctExec('grep NOTIFYCMD /etc/nut/upsmon.conf');
+	$confOk  = intval($verify) > 0;
+	$steps[] = ['ok' => $confOk, 'label' => 'upsmon.conf updated',
+	            'detail' => $confOk ? 'NOTIFYCMD + 4 NOTIFYFLAG entries' : "count=$verify sed=[$sedOut] grep=[$grepOut]"];
+
+	// Step 5: reload upsmon
+	$reloadOut = $pctExec('upsmon -c reload 2>&1 || systemctl reload nut-client 2>&1 || systemctl restart nut-client 2>&1');
+	$reloadOk  = !str_contains(strtolower($reloadOut), 'error') && !str_contains(strtolower($reloadOut), 'failed');
+	$steps[]   = ['ok' => $reloadOk, 'label' => 'NUT daemon reloaded', 'detail' => $reloadOut ?: 'OK'];
+
+	echo ok(['steps' => $steps]);
+	break;
+}
+
+// ─────────────────────────────────────────────────────────────
+case 'ups_battery_status': {
+	$pveId   = intval(getSetting($pdo, 'nut_last_pve_id',   '0'));
+	$vmid    = intval(getSetting($pdo, 'nut_last_vmid',     '0'));
+	$upsName = trim(getSetting($pdo,   'nut_last_ups_name', ''));
+	if (!$pveId || $upsName === '') { echo err('UPS not configured (nut_last_pve_id / nut_last_ups_name missing)'); break; }
+
+	$srvR = $pdo->prepare('SELECT ip FROM servers WHERE id=?');
+	$srvR->execute([$pveId]);
+	$srvRow = $srvR->fetch();
+	if (!$srvRow) { echo err('PVE server not found'); break; }
+	$ip = $srvRow['ip'];
+	if (!isSafeHost($ip)) { echo err('Invalid server IP'); break; }
+
+	$keyOpt  = file_exists('/var/www/.ssh/id_ed25519') ? '-i /var/www/.ssh/id_ed25519' : '';
+	$sshOpts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=8 -o BatchMode=yes $keyOpt";
+
+	// Run inside LXC via pct exec, or directly on the host
+	$remoteCmd = $vmid
+		? 'pct exec ' . (int)$vmid . ' -- upsc ' . escapeshellarg($upsName)
+		: 'upsc ' . escapeshellarg($upsName);
+
+	$sshCmd = sprintf('ssh %s root@%s %s 2>&1', $sshOpts, escapeshellarg($ip), escapeshellarg($remoteCmd));
+	$raw    = (string)shell_exec($sshCmd);
+	$raw    = preg_replace('/^(?:Warning:|Init SSL)[^\n]*\n?/m', '', $raw);
+
+	$raw = trim($raw);
+	if ($raw === '') { echo err('No response from upsc — check SSH key and NUT daemon'); break; }
+	if (str_starts_with($raw, 'Error:')) { echo err('upsc: ' . $raw); break; }
+
+	// Parse key:value pairs — robust against pct exec PTY stripping newlines
+	$parsed = [];
+	preg_match_all('/\b([a-z][a-z0-9_.]+):\s+(\S+)/', $raw, $m, PREG_SET_ORDER);
+	foreach ($m as $match) { $parsed[$match[1]] = $match[2]; }
+
+	if (empty($parsed)) { echo err('Could not parse upsc output: ' . substr($raw, 0, 300)); break; }
+
+	echo ok([
+		'charge'          => $parsed['battery.charge']  ?? null,
+		'runtime'         => $parsed['battery.runtime'] ?? null,
+		'status'          => $parsed['ups.status']      ?? null,
+		'input_voltage'   => $parsed['input.voltage']   ?? null,
+		'battery_voltage' => $parsed['battery.voltage'] ?? null,
+		'ups_name'        => $upsName,
+	]);
+	break;
+}
 
 // ─────────────────────────────────────────────────────────────
 case 'save_ups_server':
@@ -3594,7 +3755,7 @@ case 'wake_proxy_retry':
 		}
 		$pdo->prepare("INSERT INTO events (server_id,level,message,timestamp) VALUES (?,?,?,?)")
 		    ->execute([(int)$proxy['server_id'], 'info',
-		              "Wake Proxy: reintento WoL para '{$proxy['name']}'", date('Y-m-d H:i:s')]);
+		              "Wake Proxy: reintento WoL para '{$proxy['name']}'", gmdate('Y-m-d H:i:s')]);
 	} elseif (!empty($proxy['guest_vmid'])) {
 		$tokS = $pdo->prepare("SELECT * FROM api_tokens WHERE server_id=?");
 		$tokS->execute([(int)$proxy['server_id']]);

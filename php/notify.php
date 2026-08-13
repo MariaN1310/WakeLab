@@ -17,7 +17,7 @@
  */
 class WakeNotify
 {
-    private const EVT_KEYS = ['server_down', 'server_up', 'schedule', 'idle', 'error', 'guest_unknown', 'wake_timeout'];
+    private const EVT_KEYS = ['server_down', 'server_up', 'schedule', 'idle', 'error', 'guest_unknown', 'wake_timeout', 'ups'];
 
     // ─────────────────────────────────────────────────────────────
     // API pública

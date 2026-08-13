@@ -99,7 +99,7 @@ function toolWakeServer(string $hostname): string {
     socket_sendto($sock, $packet, strlen($packet), 0, '255.255.255.255', 9);
     socket_close($sock);
     $pdo->prepare("INSERT INTO events (server_id,level,message,timestamp) VALUES (?,?,?,?)")
-        ->execute([$s['id'], 'ok', "[Telegram Bot] WoL sent", date('Y-m-d H:i:s')]);
+        ->execute([$s['id'], 'ok', "[Telegram Bot] WoL sent", gmdate('Y-m-d H:i:s')]);
     botSetPending((int)$s['id'], 'manual_wol');
 
     // Esperar hasta 3 min a que el server responda y confirmar por Telegram
@@ -150,7 +150,7 @@ function toolShutdownServer(string $hostname): string {
             ]);
             $client->shutdown();
             $pdo->prepare("INSERT INTO events (server_id,level,message,timestamp) VALUES (?,?,?,?)")
-                ->execute([$s['id'], 'warn', "[Telegram Bot] Shutdown requested", date('Y-m-d H:i:s')]);
+                ->execute([$s['id'], 'warn', "[Telegram Bot] Shutdown requested", gmdate('Y-m-d H:i:s')]);
             botSetPending((int)$s['id'], 'manual_shutdown');
             return "✓ Shutdown sent to {$hostname}.";
         } catch (Throwable $e) {
@@ -170,7 +170,7 @@ function toolShutdownServer(string $hostname): string {
     exec($cmd, $out, $code);
     if ($code === 0) {
         $pdo->prepare("INSERT INTO events (server_id,level,message,timestamp) VALUES (?,?,?,?)")
-            ->execute([$s['id'], 'warn', "[Telegram Bot] SSH shutdown requested", date('Y-m-d H:i:s')]);
+            ->execute([$s['id'], 'warn', "[Telegram Bot] SSH shutdown requested", gmdate('Y-m-d H:i:s')]);
         botSetPending((int)$s['id'], 'manual_shutdown');
         return "✓ SSH shutdown sent to {$hostname}.";
     }
@@ -344,7 +344,7 @@ function processMessage(string $text, int $chatId): string {
 
     $servers    = $pdo->query("SELECT hostname FROM servers ORDER BY hostname")->fetchAll(PDO::FETCH_COLUMN);
     $serverList = implode(', ', $servers) ?: 'none';
-    $now        = date('Y-m-d H:i:s');
+    $now        = gmdate('Y-m-d H:i:s');
 
     $systemPrompt = "You are the WakeLab homelab assistant. Current date/time: {$now}.
 Registered servers: {$serverList}.

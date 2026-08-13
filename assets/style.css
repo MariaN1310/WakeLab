@@ -474,6 +474,11 @@ hr { border-color: var(--border-sub); opacity: 1; margin: 12px 0; }
 .sec-label { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-dim); margin-bottom: 12px; }
 .sec-mini  { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-dim); margin: 12px 0 8px; }
 
+/* Settings section separator */
+.sys-sep { display: flex; align-items: center; gap: 10px; margin: 24px 0 16px; }
+.sys-sep-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--text-dim); white-space: nowrap; }
+.sys-sep-line { flex: 1; height: 1px; background: var(--border-sub); }
+
 /* Sliders */
 .slider-row   { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
 .slider-label { font-size: 11px; color: var(--text-muted); width: 160px; flex-shrink: 0; }

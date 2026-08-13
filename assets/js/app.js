@@ -675,6 +675,11 @@ function _notifyStateChange(id, hostname, status, pending) {
             _queueNotify('server_up', id, hostname,
                 `${hostname} — encendido por schedule`,
                 `${hostname} encendido por tarea programada`, pa);
+        } else if (pa === 'wake') {
+            showToast(`${hostname} encendido`, 'ok', 'UPS restaurado');
+            _queueNotify('server_up', id, hostname,
+                `${hostname} — encendido por UPS`,
+                `${hostname} encendido automáticamente tras restauración de energía`, pa);
         } else {
             // Sin PA: verificar si el padre acaba de encenderse (VM arrancando con su host)
             const depId = srvDependsOn.get(id);
@@ -752,26 +757,339 @@ function loadUiPrefs() {
     catch { return def; }
 }
 
-function loadUpsEvents() {
+// ── NUT Auto-configure ────────────────────────────────────────
+async function nutDetect() {
+    const pveId    = document.getElementById('nut-pve-id').value;
+    const vmid     = document.getElementById('nut-vmid').value;
+    const statusEl = document.getElementById('nut-detect-status');
+    if (!pveId) { showToast('Select a PVE server', 'warn'); return; }
+    if (!vmid)  { showToast('Enter the LXC VMID', 'warn'); return; }
+    const btn = document.getElementById('nut-detect-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Detecting...';
+    statusEl.style.display = '';
+    statusEl.style.background = 'var(--bg-deep)';
+    statusEl.style.color = 'var(--text-muted)';
+    statusEl.textContent = 'Connecting via SSH…';
+    try {
+        const r    = await fetch('php/api.php', {method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({action:'nut_detect', pve_server_id: pveId, vmid: vmid})});
+        const text = await r.text();
+        let resp;
+        try { resp = JSON.parse(text); } catch(e) {
+            statusEl.style.background = 'rgba(220,53,69,.1)';
+            statusEl.style.color = 'var(--red)';
+            statusEl.textContent = 'PHP error: ' + text.slice(0, 300);
+            return;
+        }
+        if (resp.status !== 'success') {
+            statusEl.style.background = 'rgba(220,53,69,.1)';
+            statusEl.style.color = 'var(--red)';
+            statusEl.textContent = resp.message || 'Detection failed';
+            return;
+        }
+        const list = resp.data?.ups_list || [];
+        const sel  = document.getElementById('nut-ups-name');
+        if (sel) sel.innerHTML = list.map(u => `<option value="${u}">${u}</option>`).join('');
+        const show = id => { const el = document.getElementById(id); if (el) el.style.display = ''; };
+        show('nut-ups-row'); show('nut-configure-btn'); show('nut-test-btn'); show('nut-test-online-btn');
+        statusEl.style.background = 'rgba(40,167,69,.1)';
+        statusEl.style.color = 'var(--green)';
+        statusEl.textContent = `Found ${list.length} UPS: ${list.join(', ')}`;
+        // Persist PVE + VMID selection
+        await Promise.all([
+            fetch('php/api.php', {method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({action:'update_setting', key:'nut_last_pve_id', value: pveId})}),
+            fetch('php/api.php', {method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({action:'update_setting', key:'nut_last_vmid', value: vmid})}),
+        ]);
+    } catch(e) {
+        statusEl.style.background = 'rgba(220,53,69,.1)';
+        statusEl.style.color = 'var(--red)';
+        statusEl.textContent = 'Network error: ' + e.message;
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-search me-1"></i>Detect UPS';
+    }
+}
+
+async function nutConfigure() {
+    const pveId   = document.getElementById('nut-pve-id').value;
+    const vmid    = document.getElementById('nut-vmid').value;
+    const upsName = document.getElementById('nut-ups-name').value;
+    const btn     = document.getElementById('nut-configure-btn');
+    const stepsEl = document.getElementById('nut-steps');
+    btn.disabled  = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Configuring...';
+    stepsEl.style.display = 'flex';
+    stepsEl.innerHTML = '<div style="color:var(--text-dim);padding:8px 0">Running steps…</div>';
+    try {
+        const resp  = await fetch('php/api.php', {method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({action:'nut_configure', pve_server_id: pveId, vmid: vmid, ups_name: upsName})}).then(r=>r.json());
+        const steps = resp.data?.steps || [];
+        if (resp.status !== 'success' && steps.length === 0) {
+            stepsEl.innerHTML = `<div style="color:var(--red);padding:8px 0">${resp.message || 'Unknown error'}</div>`;
+            return;
+        }
+        stepsEl.innerHTML = steps.map((s, i) =>
+            `<div style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;${i < steps.length-1 ? 'border-bottom:1px solid var(--border-sub)' : ''}">
+                <span style="color:${s.ok ? 'var(--green)' : 'var(--red)'};font-size:15px;flex-shrink:0;margin-top:1px">${s.ok ? '✓' : '✗'}</span>
+                <div>
+                    <div style="font-weight:600;font-size:12px">${s.label}</div>
+                    ${s.detail ? `<div style="color:var(--text-dim);font-size:11px;margin-top:2px">${s.detail}</div>` : ''}
+                </div>
+            </div>`
+        ).join('');
+        const allOk = steps.length > 0 && steps.every(s => s.ok);
+        const testBtn = document.getElementById('nut-test-btn');
+        if (allOk) {
+            // Persist config — await so reload doesn't lose them
+            await Promise.all([
+                {key:'nut_last_pve_id',  value: pveId},
+                {key:'nut_last_vmid',    value: vmid},
+                {key:'nut_last_ups_name',value: upsName},
+            ].map(s => fetch('php/api.php', {method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({action:'update_setting', key: s.key, value: s.value})})));
+            showToast('NUT configured — reloading…', 'ok');
+            setTimeout(() => window.location.reload(), 1200);
+        } else {
+            showToast('Some steps failed — check details', 'warn');
+        }
+    } catch(e) { stepsEl.innerHTML = '<div style="color:var(--red);padding:8px 0">Request failed</div>'; }
+    finally {
+        btn.disabled  = false;
+        btn.innerHTML = '<i class="bi bi-gear-fill me-1"></i>Configure NUT';
+    }
+}
+
+function nutToggleReconfigure() {
+    const form    = document.getElementById('nut-form');
+    const btn     = document.getElementById('nut-reconf-toggle-btn');
+    const stepsEl = document.getElementById('nut-steps');
+    const open    = form.style.display === 'none';
+    form.style.display  = open ? '' : 'none';
+    stepsEl.style.display = open ? 'flex' : 'none';
+    btn.innerHTML = open
+        ? '<i class="bi bi-x me-1"></i>Cancel'
+        : '<i class="bi bi-arrow-repeat me-1"></i>Reconfigure';
+    if (open) form.style.marginTop = '16px';
+}
+
+async function nutTestConnection() {
+    const btn       = document.getElementById('nut-test-conn-btn');
+    const resultEl  = document.getElementById('nut-test-result');
+    const tokenEl   = document.getElementById('ups-webhook-token');
+    const urlEl     = document.getElementById('ups-custom-headers-val');
+    const token     = tokenEl ? tokenEl.value : '';
+    const webhookUrl = window.location.origin + window.location.pathname.replace(/\/[^/]*$/, '/') + 'webhook.php';
+    btn.disabled    = true;
+    btn.innerHTML   = '<span class="spinner-border spinner-border-sm me-1"></span>Testing…';
+    resultEl.style.display = '';
+    resultEl.style.background = 'var(--bg-deep)';
+    resultEl.style.color = 'var(--text-muted)';
+    resultEl.textContent = 'Sending test request to webhook…';
+    try {
+        const resp = await fetch(webhookUrl, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-Webhook-Token': token},
+            body: JSON.stringify({test: true, type: 'ONBATT', ups_name: 'connection-test'})
+        }).then(r => r.json());
+        if (resp.status === 'ok' || resp.message?.toLowerCase().includes('test')) {
+            resultEl.style.background = 'rgba(40,167,69,.1)';
+            resultEl.style.color = 'var(--green)';
+            resultEl.innerHTML = '<i class="bi bi-check-circle me-1"></i>Connection OK — webhook is reachable and token is valid';
+        } else {
+            resultEl.style.background = 'rgba(220,53,69,.1)';
+            resultEl.style.color = 'var(--red)';
+            resultEl.textContent = 'Unexpected response: ' + JSON.stringify(resp).slice(0, 200);
+        }
+    } catch(e) {
+        resultEl.style.background = 'rgba(220,53,69,.1)';
+        resultEl.style.color = 'var(--red)';
+        resultEl.textContent = 'Failed: ' + e.message;
+    } finally {
+        btn.disabled  = false;
+        btn.innerHTML = '<i class="bi bi-check2-circle me-1"></i>Test connection';
+    }
+}
+
+// ── UPS Battery Status ────────────────────────────────────────
+let _upsBatInterval  = null;
+let _upsBatOnBattery = false;
+let _upsBatPollSecs  = (window.APP_CONFIG?.upsPollSecs ?? 300);
+
+function setUpsPollInterval(secs) {
+    _upsBatPollSecs = secs;
+    clearInterval(_upsBatInterval);
+    _upsBatInterval = null;
+    if (secs > 0) _upsBatInterval = setInterval(fetchUpsBatteryStatus, secs * 1000);
+    _postSetting('ups_poll_interval_sec', String(secs));
+}
+
+async function fetchUpsBatteryStatus() {
+    const widget    = document.getElementById('ups-battery-widget');
+    const updatedEl = document.getElementById('ups-bat-updated');
+    try {
+        const resp = await fetch('php/api.php', {method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({action:'ups_battery_status'})}).then(r => r.json());
+        if (resp.status !== 'success') {
+            if (widget) widget.innerHTML = `<span style="color:var(--text-dim);font-size:12px">${resp.message || 'No data'}</span>`;
+            return;
+        }
+        const d = resp.data;
+        _upsBatOnBattery = (d.status || '').includes('OB');
+        // Switch polling speed when on battery
+        if (_upsBatOnBattery && _upsBatPollSecs !== 10) {
+            clearInterval(_upsBatInterval);
+            _upsBatInterval = setInterval(fetchUpsBatteryStatus, 10000);
+        } else if (!_upsBatOnBattery && _upsBatPollSecs > 10) {
+            clearInterval(_upsBatInterval);
+            _upsBatInterval = setInterval(fetchUpsBatteryStatus, _upsBatPollSecs * 1000);
+        }
+        if (widget) _renderBatteryWidget(widget, d);
+        _updateBatTopbar(d);
+        if (updatedEl) updatedEl.textContent = 'Updated ' + new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    } catch(e) {
+        if (widget) widget.innerHTML = '<span style="color:var(--text-dim);font-size:12px">Unable to reach NUT</span>';
+    }
+}
+
+function _renderBatteryWidget(el, d) {
+    const charge  = d.charge ?? null;
+    const runtime = d.runtime != null ? Math.round(d.runtime / 60) : null;
+    const status  = (d.status || '').trim();
+    const isOB    = status.includes('OB');
+    const isLB    = status.includes('LB');
+    const isCHRG  = status.includes('CHRG');
+    const color   = isLB ? 'var(--red)' : isOB ? 'var(--amber)' : 'var(--green)';
+    const pct     = charge ?? 0;
+    const batIcon = isLB ? 'bi-battery' : isOB ? 'bi-battery-half' : isCHRG ? 'bi-battery-charging' : 'bi-battery-full';
+    const statusMap = {'OL':'Online','OB':'On Battery','LB':'Low Battery','CHRG':'Charging','DISCHRG':'Discharging','OL CHRG':'Charging'};
+    const statusLabel = statusMap[status] || status || '—';
+    el.innerHTML = `
+        <div style="display:flex;align-items:center;gap:20px;margin-bottom:12px">
+            <div style="text-align:center">
+                <div style="font-size:32px;font-weight:700;color:${color};font-variant-numeric:tabular-nums;line-height:1">${charge != null ? charge + '%' : '—'}</div>
+                <div style="font-size:10px;color:var(--text-dim);margin-top:2px">${runtime != null ? '~' + runtime + ' min' : ''}</div>
+            </div>
+            <div style="flex:1">
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
+                    <i class="bi ${batIcon}" style="color:${color};font-size:16px"></i>
+                    <span style="font-size:13px;font-weight:600;color:${color}">${statusLabel}</span>
+                </div>
+                <div style="background:var(--bg-deep);border-radius:6px;height:10px;overflow:hidden;border:1px solid var(--border)">
+                    <div style="width:${pct}%;background:${color};height:100%;border-radius:6px;transition:width .6s ease"></div>
+                </div>
+                <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;color:var(--text-dim)">
+                    ${d.input_voltage ? `<span>Input: ${d.input_voltage} V</span>` : '<span></span>'}
+                    ${d.battery_voltage ? `<span>Battery: ${d.battery_voltage} V</span>` : ''}
+                </div>
+            </div>
+        </div>
+        ${isOB ? `<div style="background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.25);border-radius:var(--radius);padding:7px 12px;font-size:12px;color:var(--amber);font-weight:600"><i class="bi bi-exclamation-triangle me-1"></i>Running on battery — updating every 10 s</div>` : ''}
+        ${isLB ? `<div style="background:rgba(220,53,69,.1);border:1px solid rgba(220,53,69,.3);border-radius:var(--radius);padding:7px 12px;font-size:12px;color:var(--red);font-weight:600;margin-top:6px"><i class="bi bi-battery me-1"></i>Low battery — shutdown imminent</div>` : ''}
+    `;
+}
+
+function _updateBatTopbar(d) {
+    const pill    = document.getElementById('ups-bat-topbar');
+    const pctEl   = document.getElementById('ups-bat-pct');
+    const iconEl  = document.getElementById('ups-bat-icon');
+    if (!pill) return;
+    const status  = (d.status || '').trim();
+    const isOB    = status.includes('OB');
+    const isLB    = status.includes('LB');
+    const isCHRG  = status.includes('CHRG');
+    const color   = isLB ? 'var(--red)' : isOB ? 'var(--amber)' : 'var(--green)';
+    const icon    = isLB ? 'bi-battery' : isOB ? 'bi-battery-half' : isCHRG ? 'bi-battery-charging' : 'bi-battery-full';
+    pill.style.display = 'flex';
+    pill.style.color = color;
+    pill.style.borderColor = isOB ? 'rgba(210,153,34,.4)' : 'var(--border)';
+    pill.style.background  = isOB ? 'rgba(210,153,34,.1)' : 'var(--bg-deep)';
+    if (pctEl) pctEl.textContent = (d.charge != null ? d.charge + '%' : '—');
+    if (iconEl) iconEl.className = 'bi ' + icon;
+}
+
+// Auto-start battery polling when UPS panel opens or on page load (if configured)
+(function() {
+    function startBatPolling() {
+        const card = document.getElementById('ups-battery-card');
+        if (!card) return; // not configured
+        fetchUpsBatteryStatus();
+        if (_upsBatPollSecs > 0) _upsBatInterval = setInterval(fetchUpsBatteryStatus, _upsBatPollSecs * 1000);
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startBatPolling);
+    else startBatPolling();
+})();
+
+let _upsEventsInterval = null;
+
+function loadUpsEvents(btnEl) {
     const el = document.getElementById('ups-events-list');
     if (!el) return;
-    el.innerHTML = '<span style="color:var(--text-dim)">Loading…</span>';
+    const refreshBtn = (btnEl && btnEl.tagName) ? btnEl : document.getElementById('ups-events-refresh-btn');
+    if (refreshBtn) {
+        refreshBtn.disabled = true;
+        const icon = refreshBtn.querySelector('i');
+        if (icon) { icon.style.transition = 'transform .5s'; icon.style.transform = 'rotate(360deg)'; }
+        setTimeout(() => {
+            if (icon) { icon.style.transition = 'none'; icon.style.transform = ''; }
+            refreshBtn.disabled = false;
+        }, 600);
+    }
     fetch('php/api.php', {method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({action:'get_ups_events'})})
     .then(r => r.json()).then(res => {
-        if (res.status !== 'success' || !res.data?.length) { el.innerHTML = '<span style="color:var(--text-dim)">No UPS events</span>'; return; }
-        const rows = res.data.map(e => {
-            const aff = (e.hosts_affected || []).map(h => escHtml(h.hostname) + '(' + escHtml(h.result) + ')').join(', ');
-            return `<div style="display:flex;gap:10px;padding:4px 0;border-bottom:1px solid var(--border-dim)">
-                <span style="color:var(--text-dim);white-space:nowrap">${escHtml(e.created_at)}</span>
-                <span style="font-weight:600;min-width:70px">${escHtml(e.event)}</span>
-                <span style="color:var(--text-dim)">${escHtml(e.ups_name)}</span>
-                <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${aff}</span>
+        if (res.status !== 'success' || !res.data?.length) {
+            el.innerHTML = '<div style="color:var(--text-dim);padding:16px 0;text-align:center;font-size:12px"><i class="bi bi-inbox me-2"></i>No UPS events recorded</div>';
+            return;
+        }
+        const evtStyle = {
+            onbatt:   {bg:'rgba(210,153,34,.15)', color:'var(--amber)', icon:'bi-battery-half'},
+            online:   {bg:'rgba(40,167,69,.15)',  color:'var(--green)', icon:'bi-lightning-charge-fill'},
+            lowbatt:  {bg:'rgba(220,53,69,.15)',  color:'var(--red)',   icon:'bi-battery'},
+            shutdown: {bg:'rgba(220,53,69,.15)',  color:'var(--red)',   icon:'bi-power'},
+        };
+        const rows = res.data.map((e, i) => {
+            const evt = (e.event || '').toLowerCase();
+            const st  = evtStyle[evt] || {bg:'rgba(128,128,128,.1)', color:'var(--text-muted)', icon:'bi-info-circle'};
+            const aff = (e.hosts_affected || []).map(h => {
+                const rc = h.result === 'wol_sent' ? 'var(--green)' : h.result === 'ssh' ? 'var(--blue)' : 'var(--text-dim)';
+                return `<span style="color:${rc}">${escHtml(h.hostname)}</span>`;
+            }).join('<span style="color:var(--border);margin:0 3px">·</span>');
+            return `<div style="display:flex;gap:12px;align-items:center;padding:10px 0;${i < res.data.length-1 ? 'border-bottom:1px solid var(--border-sub)' : ''}">
+                <span style="background:${st.bg};color:${st.color};border-radius:6px;padding:3px 9px;font-size:10px;font-weight:700;white-space:nowrap;min-width:70px;text-align:center;text-transform:uppercase;letter-spacing:.04em;flex-shrink:0">
+                    <i class="bi ${st.icon} me-1"></i>${escHtml(e.event)}
+                </span>
+                <span style="font-size:11px;color:var(--text-dim);white-space:nowrap;flex-shrink:0">${escHtml(e.created_at || '')}</span>
+                <span style="font-size:11px;color:var(--text-muted);font-family:monospace;flex-shrink:0">${escHtml(e.ups_name || '')}</span>
+                <span style="font-size:11px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${aff || '<span style="color:var(--text-dim)">—</span>'}</span>
             </div>`;
         });
         el.innerHTML = rows.join('');
-    }).catch(() => { el.innerHTML = '<span style="color:var(--red)">Error loading events</span>'; });
+    }).catch(() => { el.innerHTML = '<div style="color:var(--red);font-size:12px;padding:8px 0">Error loading events</div>'; });
 }
+
+// Auto-load UPS events when panel opens, auto-refresh every 30s
+(function() {
+    function watchPanel() {
+        const panel = document.getElementById('sp-panel-ups');
+        if (!panel) return;
+        const obs = new MutationObserver(() => {
+            if (panel.style.display !== 'none') {
+                loadUpsEvents();
+                if (!_upsEventsInterval) _upsEventsInterval = setInterval(loadUpsEvents, 30000);
+            } else {
+                clearInterval(_upsEventsInterval); _upsEventsInterval = null;
+            }
+        });
+        obs.observe(panel, {attributes: true, attributeFilter: ['style']});
+        // Load immediately if already visible
+        if (panel.style.display !== 'none') loadUpsEvents();
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watchPanel);
+    else watchPanel();
+})();
 
 function saveUpsSettings(srvId) {
     const managed      = document.getElementById('ups_managed_'      + srvId)?.checked ? 1 : 0;
@@ -926,6 +1244,7 @@ async function loadSistemaSettings() {
     if (el('cfg-wakelab-url'))   el('cfg-wakelab-url').value   = d.wakelab_base_url     ?? '';
     const retSel = el('cfg-log-retention');
     if (retSel) retSel.value = d.event_retention || '1000';
+    if (d.timezone && el('ui-timezone-server')) el('ui-timezone-server').value = d.timezone;
     initUiPrefControls();
     loadWakeSplashSettings();
 }
@@ -1068,23 +1387,16 @@ function fmtTimestamp(ts) {
     } catch { return ts; }
 }
 
-// ── SISTEMA SUB-SWITCH ───────────────────────────────────────────────────────
+// ── SISTEMA SUB-SWITCH (kept for compatibility, no-op now) ───────────────────
 
 function sysSwitch(sub) {
-    ['general','tiempos','ui','wakeproxy','admin'].forEach(s => {
-        document.getElementById('sys-tab-' + s)?.classList.remove('active');
-        const p = document.getElementById('sys-panel-' + s);
-        if (p) p.style.display = 'none';
-    });
-    document.getElementById('sys-tab-' + sub)?.classList.add('active');
-    const active = document.getElementById('sys-panel-' + sub);
-    if (active) active.style.display = '';
+    // sub-tabs removed — System content is now flat; kept for compatibility
 }
 
 // ── SETTINGS TOP-LEVEL SWITCH ────────────────────────────────────────────────
 
 function settingsSwitch(tab) {
-    ['notificaciones','sistema','cuenta','ups'].forEach(t => {
+    ['notificaciones','sistema','wakeproxy','ups','cuenta'].forEach(t => {
         document.getElementById('sp-tab-' + t)?.classList.remove('active');
         const panel = document.getElementById('sp-panel-' + t);
         if (panel) panel.style.display = 'none';
@@ -1092,7 +1404,7 @@ function settingsSwitch(tab) {
     document.getElementById('sp-tab-' + tab)?.classList.add('active');
     const active = document.getElementById('sp-panel-' + tab);
     if (active) active.style.display = '';
-    if (tab === 'sistema') loadSistemaSettings();
+    if (tab === 'sistema' || tab === 'wakeproxy') loadSistemaSettings();
 }
 
 function ntSwitch(channel) {

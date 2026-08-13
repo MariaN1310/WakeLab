@@ -273,6 +273,11 @@ $npmWpToken  = $_wpTokenRow ?: '';
                     <span><span class="dot dot-green"></span><span id="count-online">—</span> online</span>
                     <span><span class="dot dot-gray"></span><span id="count-offline">—</span> offline</span>
                 </div>
+                <!-- UPS battery pill — shown when NUT is configured -->
+                <span id="ups-bat-topbar" style="display:none;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;border:1px solid var(--border);background:var(--bg-deep);cursor:default" title="UPS battery status" onclick="document.getElementById('sp-tab-ups')?.click()">
+                    <i id="ups-bat-icon" class="bi bi-battery-half" style="font-size:13px"></i>
+                    <span id="ups-bat-pct">—%</span>
+                </span>
                 <button id="live-indicator" class="sync-btn" onclick="manualSync()" title="sync now">
                     <svg id="sync-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
@@ -1313,12 +1318,41 @@ $npmWpToken  = $_wpTokenRow ?: '';
                                     </div>
                                 </div>
 
-                                <?php /* V2 — Sección UPS por servidor deshabilitada temporalmente
+                                <!-- UPS por servidor -->
                                 <div class="cfg-section">
                                     <div class="cfg-section-title">UPS</div>
-                                    ... ups_managed, ups_priority, ups_ignore_delay, ups_last_resort ...
+                                    <div class="form-row">
+                                        <span class="form-label">Managed by UPS</span>
+                                        <div class="form-check form-switch mb-0">
+                                            <input class="form-check-input" type="checkbox" id="ups_managed_<?= $id ?>"
+                                                <?= intval($srv['ups_managed'] ?? 0) ? 'checked' : '' ?>
+                                                onchange="saveUpsSettings(<?= $id ?>)">
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <span class="form-label">Shutdown priority <span class="fmodal-label-hint">lower = first</span></span>
+                                        <input type="number" min="1" max="99" class="form-control" style="width:80px"
+                                            id="ups_priority_<?= $id ?>"
+                                            value="<?= intval($srv['ups_priority'] ?? 10) ?>"
+                                            onchange="saveUpsSettings(<?= $id ?>)">
+                                    </div>
+                                    <div class="form-row">
+                                        <span class="form-label">Ignore global delay <span class="fmodal-label-hint">shutdown immediately on battery</span></span>
+                                        <div class="form-check form-switch mb-0">
+                                            <input class="form-check-input" type="checkbox" id="ups_ignore_delay_<?= $id ?>"
+                                                <?= intval($srv['ups_ignore_delay'] ?? 0) ? 'checked' : '' ?>
+                                                onchange="saveUpsSettings(<?= $id ?>)">
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <span class="form-label">Last resort <span class="fmodal-label-hint">skip shutdown if this server is the only one online</span></span>
+                                        <div class="form-check form-switch mb-0">
+                                            <input class="form-check-input" type="checkbox" id="ups_last_resort_<?= $id ?>"
+                                                <?= intval($srv['ups_last_resort'] ?? 0) ? 'checked' : '' ?>
+                                                onchange="saveUpsSettings(<?= $id ?>)">
+                                        </div>
+                                    </div>
                                 </div>
-                                */ ?>
 
                                 <!-- Credenciales -->
                                 <div id="token-section-<?= $id ?>" style="<?= !$srv['api_enabled'] ? 'display:none' : '' ?>">
@@ -2087,19 +2121,24 @@ location /_wl/ {
 
                     <div class="notif-tab-item" id="sp-tab-sistema" onclick="settingsSwitch('sistema')">
                         <div class="notif-tab-btn">
-                            <span class="notif-tab-icon-wrap" style="color:#8b949e"><i class="bi bi-sliders"></i></span>
+                            <span class="notif-tab-icon-wrap" style="color:#58a6ff"><i class="bi bi-sliders"></i></span>
                             <span class="notif-tab-name">System</span>
                         </div>
                     </div>
 
-                    <?php /* V2 — Tab UPS deshabilitado temporalmente
+                    <div class="notif-tab-item" id="sp-tab-wakeproxy" onclick="settingsSwitch('wakeproxy')">
+                        <div class="notif-tab-btn">
+                            <span class="notif-tab-icon-wrap" style="color:#f0883e"><i class="bi bi-lightning-charge"></i></span>
+                            <span class="notif-tab-name">Wake Proxy</span>
+                        </div>
+                    </div>
+
                     <div class="notif-tab-item" id="sp-tab-ups" onclick="settingsSwitch('ups')">
                         <div class="notif-tab-btn">
-                            <span class="notif-tab-icon-wrap" style="color:#f0a500"><i class="bi bi-lightning-charge-fill"></i></span>
+                            <span class="notif-tab-icon-wrap" style="color:#f0a500"><i class="bi bi-battery-half"></i></span>
                             <span class="notif-tab-name">UPS</span>
                         </div>
                     </div>
-                    */ ?>
 
                     <div class="notif-tab-item" id="sp-tab-cuenta" onclick="settingsSwitch('cuenta')">
                         <div class="notif-tab-btn">
@@ -2573,42 +2612,8 @@ location /_wl/ {
                 <!-- ════ Panel: Sistema ══════════════════════════════════ -->
                 <div id="sp-panel-sistema" style="display:none">
 
-                    <!-- Sub-tabs de Sistema -->
-                    <div class="notif-tabs mb-3">
-                        <div class="notif-tab-item active" id="sys-tab-general" onclick="sysSwitch('general')">
-                            <div class="notif-tab-btn">
-                                <span class="notif-tab-icon-wrap" style="color:#58a6ff"><i class="bi bi-gear"></i></span>
-                                <span class="notif-tab-name">General</span>
-                            </div>
-                        </div>
-                        <div class="notif-tab-item" id="sys-tab-tiempos" onclick="sysSwitch('tiempos')">
-                            <div class="notif-tab-btn">
-                                <span class="notif-tab-icon-wrap" style="color:#79c0ff"><i class="bi bi-clock-history"></i></span>
-                                <span class="notif-tab-name">Timings</span>
-                            </div>
-                        </div>
-                        <div class="notif-tab-item" id="sys-tab-ui" onclick="sysSwitch('ui')">
-                            <div class="notif-tab-btn">
-                                <span class="notif-tab-icon-wrap" style="color:#3fb950"><i class="bi bi-display"></i></span>
-                                <span class="notif-tab-name">Interface</span>
-                            </div>
-                        </div>
-                        <div class="notif-tab-item" id="sys-tab-wakeproxy" onclick="sysSwitch('wakeproxy')">
-                            <div class="notif-tab-btn">
-                                <span class="notif-tab-icon-wrap" style="color:#f0883e"><i class="bi bi-lightning-charge"></i></span>
-                                <span class="notif-tab-name">Wake Proxy</span>
-                            </div>
-                        </div>
-                        <div class="notif-tab-item" id="sys-tab-admin" onclick="sysSwitch('admin')">
-                            <div class="notif-tab-btn">
-                                <span class="notif-tab-icon-wrap" style="color:#8b949e"><i class="bi bi-wrench-adjustable"></i></span>
-                                <span class="notif-tab-name">Admin</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Sub-panel: General -->
-                    <div id="sys-panel-general">
+                    <div class="sys-sep"><span class="sys-sep-label">General</span><span class="sys-sep-line"></span></div>
+                    <div>
 
                         <div class="row g-3">
                             <div class="col-12 col-md-6">
@@ -2713,10 +2718,11 @@ location /_wl/ {
                             </div>
                         </div>
 
-                    </div><!-- /#sys-panel-general -->
+                    </div>
 
-                    <!-- Sub-panel: Tiempos -->
-                    <div id="sys-panel-tiempos" style="display:none">
+                    <!-- Timings -->
+                    <div class="sys-sep"><span class="sys-sep-label">Performance</span><span class="sys-sep-line"></span></div>
+                    <div id="sys-panel-tiempos">
 
                         <div class="card">
                             <div class="card-body">
@@ -2768,8 +2774,9 @@ location /_wl/ {
 
                     </div><!-- /#sys-panel-tiempos -->
 
-                    <!-- Sub-panel: Interfaz -->
-                    <div id="sys-panel-ui" style="display:none">
+                    <!-- Interface + Kiosk -->
+                    <div class="sys-sep"><span class="sys-sep-label">Interface</span><span class="sys-sep-line"></span></div>
+                    <div id="sys-panel-ui">
                         <div class="card">
                             <div class="card-body">
                                 <div class="sec-label">Display preferences</div>
@@ -2874,132 +2881,11 @@ location /_wl/ {
                     </div>
                     </div><!-- /#sys-panel-ui -->
 
-                    <!-- Sub-panel: Wake Proxy -->
-                    <div id="sys-panel-wakeproxy" style="display:none">
-                        <div class="card">
-                            <div class="card-body">
-                                <div class="sec-label">Behaviour</div>
+                    <!-- Wake Proxy settings are in sp-panel-wakeproxy (top-level tab) -->
 
-                                <div class="push-evt-row">
-                                    <div class="push-evt-info">
-                                        <span class="notif-evt-icon" style="color:#8b949e"><i class="bi bi-play-circle"></i></span>
-                                        <div>
-                                            <span class="push-evt-label">Splash</span>
-                                            <div style="font-size:11px;color:var(--text-dim)">Waiting screen while waking a service</div>
-                                        </div>
-                                    </div>
-                                    <select class="form-select form-select-sm" id="ui-splash-mode" style="max-width:130px"
-                                            onchange="saveWakeSplashMode(this.value)">
-                                        <option value="detailed">Detailed</option>
-                                        <option value="simple">Simple</option>
-                                    </select>
-                                </div>
-
-                                <div class="push-evt-row">
-                                    <div class="push-evt-info">
-                                        <span class="notif-evt-icon" style="color:#8b949e"><i class="bi bi-arrow-repeat"></i></span>
-                                        <div>
-                                            <span class="push-evt-label">Automatic retries</span>
-                                            <div style="font-size:11px;color:var(--text-dim)">Attempts before showing an error in the splash</div>
-                                        </div>
-                                    </div>
-                                    <input type="number" class="form-control form-control-sm" id="ui-splash-retries"
-                                           style="max-width:80px" min="1" max="10" value="3"
-                                           onchange="saveWakeSplashRetries(this.value)">
-                                </div>
-
-                                <div class="push-evt-row" style="border-bottom:none">
-                                    <div class="push-evt-info">
-                                        <span class="notif-evt-icon" style="color:#8b949e"><i class="bi bi-hourglass-split"></i></span>
-                                        <div>
-                                            <span class="push-evt-label">Wake delay <span style="font-size:10px;color:var(--text-dim)">(seg)</span></span>
-                                            <div style="font-size:11px;color:var(--text-dim)">Seconds the splash waits before sending WoL — filters out health checks and bots that disconnect immediately</div>
-                                        </div>
-                                    </div>
-                                    <input type="number" class="form-control form-control-sm" id="ui-wake-delay"
-                                           style="max-width:80px" min="0" max="30" value="3"
-                                           onchange="saveWpSetting('wp_wake_delay_sec', this.value)">
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="card mt-3">
-                            <div class="card-body">
-                                <div class="sec-label">Security</div>
-                                <p style="font-size:11px;color:var(--text-muted);margin:6px 0 10px">
-                                    Set this header in Nginx Proxy Manager for each proxy entry pointing to WakeLab:
-                                </p>
-                                <div style="background:var(--bg-deep);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-size:12px;margin-bottom:12px">
-                                    <span style="color:var(--text-dim)">X-Wake-Proxy-Token:</span>
-                                    <code style="color:var(--blue);user-select:all;margin-left:6px" id="wp-token-val">loading…</code>
-                                </div>
-                                <button class="btn btn-sm btn-outline-secondary" onclick="regenWakeProxyToken(this)">
-                                    <i class="bi bi-arrow-clockwise me-1"></i>Regenerate token
-                                </button>
-                            </div>
-                        </div>
-
-                        <div class="card mt-3">
-                            <div class="card-body">
-                                <div class="sec-label">Access Control</div>
-
-                                <div class="push-evt-row">
-                                    <div class="push-evt-info">
-                                        <span class="notif-evt-icon" style="color:#8b949e"><i class="bi bi-house-lock"></i></span>
-                                        <div>
-                                            <span class="push-evt-label">Local network only</span>
-                                            <div style="font-size:11px;color:var(--text-dim)">Only wake servers for requests from allowed IP ranges</div>
-                                        </div>
-                                    </div>
-                                    <div class="form-check form-switch mb-0">
-                                        <input class="form-check-input" type="checkbox" role="switch" id="wp-local-only"
-                                               onchange="saveWpSetting('wp_local_only', this.checked ? '1' : '0');document.getElementById('wp-ranges-section').style.display=this.checked?'':'none'">
-                                    </div>
-                                </div>
-
-                                <div id="wp-ranges-section" style="margin:8px 0 12px;display:none">
-                                    <label style="font-size:11px;color:var(--text-dim);margin-bottom:4px;display:block">Allowed IP ranges (CIDR, comma-separated)</label>
-                                    <textarea class="form-control form-control-sm" id="wp-allowed-ranges" rows="2"
-                                              style="font-family:monospace;font-size:12px"
-                                              placeholder="192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12"
-                                              onchange="saveWpSetting('wp_allowed_ranges', this.value.trim())"></textarea>
-                                </div>
-
-                                <div class="push-evt-row" style="margin-top:4px">
-                                    <div class="push-evt-info">
-                                        <span class="notif-evt-icon" style="color:#8b949e"><i class="bi bi-robot"></i></span>
-                                        <div>
-                                            <span class="push-evt-label">Block bots & scanners</span>
-                                            <div style="font-size:11px;color:var(--text-dim)">Block known crawlers and vulnerability scanners by User-Agent</div>
-                                        </div>
-                                    </div>
-                                    <div class="form-check form-switch mb-0">
-                                        <input class="form-check-input" type="checkbox" role="switch" id="wp-block-bots"
-                                               onchange="saveWpSetting('wp_block_bots', this.checked ? '1' : '0');document.getElementById('wp-ua-section').style.display=this.checked?'':'none'">
-                                    </div>
-                                </div>
-
-                                <div id="wp-ua-section" style="margin:8px 0 12px;display:none">
-                                    <label style="font-size:11px;color:var(--text-dim);margin-bottom:4px;display:block">Additional blocked User-Agents (one per line, partial match)</label>
-                                    <textarea class="form-control form-control-sm" id="wp-blocked-ua" rows="3"
-                                              style="font-family:monospace;font-size:12px"
-                                              placeholder="myspecialbot&#10;custom-scanner"
-                                              onchange="saveWpSetting('wp_blocked_ua', this.value.trim())"></textarea>
-                                </div>
-
-                                <div style="margin-top:8px">
-                                    <label style="font-size:11px;color:var(--text-dim);margin-bottom:4px;display:block">Blocked IPs / ranges (CIDR, comma-separated) — always blocked regardless of other rules</label>
-                                    <textarea class="form-control form-control-sm" id="wp-blocked-ips" rows="2"
-                                              style="font-family:monospace;font-size:12px"
-                                              placeholder="1.2.3.4, 5.6.7.0/24"
-                                              onchange="saveWpSetting('wp_blocked_ips', this.value.trim())"></textarea>
-                                </div>
-                            </div>
-                        </div>
-                    </div><!-- /#sys-panel-wakeproxy -->
-
-                    <!-- Sub-panel: Admin -->
-                    <div id="sys-panel-admin" style="display:none">
+                    <!-- Admin -->
+                    <div class="sys-sep"><span class="sys-sep-label">Admin</span><span class="sys-sep-line"></span></div>
+                    <div id="sys-panel-admin">
                         <div class="row g-3">
                             <div class="col-12 col-md-6">
                                 <div class="card h-100">
@@ -3125,7 +3011,133 @@ location /_wl/ {
                         </div>
                     </div><!-- /#sys-panel-admin -->
 
-                </div>
+                </div><!-- /#sp-panel-sistema -->
+
+                <!-- ════ Panel: Wake Proxy ══════════════════════════════ -->
+                <div id="sp-panel-wakeproxy" style="display:none">
+
+                    <div class="card">
+                        <div class="card-body">
+                            <div class="sec-label">Behaviour</div>
+
+                            <div class="push-evt-row">
+                                <div class="push-evt-info">
+                                    <span class="notif-evt-icon" style="color:#8b949e"><i class="bi bi-play-circle"></i></span>
+                                    <div>
+                                        <span class="push-evt-label">Splash</span>
+                                        <div style="font-size:11px;color:var(--text-dim)">Waiting screen while waking a service</div>
+                                    </div>
+                                </div>
+                                <select class="form-select form-select-sm" id="ui-splash-mode" style="max-width:130px"
+                                        onchange="saveWakeSplashMode(this.value)">
+                                    <option value="detailed">Detailed</option>
+                                    <option value="simple">Simple</option>
+                                </select>
+                            </div>
+
+                            <div class="push-evt-row">
+                                <div class="push-evt-info">
+                                    <span class="notif-evt-icon" style="color:#8b949e"><i class="bi bi-arrow-repeat"></i></span>
+                                    <div>
+                                        <span class="push-evt-label">Automatic retries</span>
+                                        <div style="font-size:11px;color:var(--text-dim)">Attempts before showing an error in the splash</div>
+                                    </div>
+                                </div>
+                                <input type="number" class="form-control form-control-sm" id="ui-splash-retries"
+                                       style="max-width:80px" min="1" max="10" value="3"
+                                       onchange="saveWakeSplashRetries(this.value)">
+                            </div>
+
+                            <div class="push-evt-row" style="border-bottom:none">
+                                <div class="push-evt-info">
+                                    <span class="notif-evt-icon" style="color:#8b949e"><i class="bi bi-hourglass-split"></i></span>
+                                    <div>
+                                        <span class="push-evt-label">Wake delay <span style="font-size:10px;color:var(--text-dim)">(sec)</span></span>
+                                        <div style="font-size:11px;color:var(--text-dim)">Seconds the splash waits before sending WoL — filters out health checks and bots that disconnect immediately</div>
+                                    </div>
+                                </div>
+                                <input type="number" class="form-control form-control-sm" id="ui-wake-delay"
+                                       style="max-width:80px" min="0" max="30" value="3"
+                                       onchange="saveWpSetting('wp_wake_delay_sec', this.value)">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card mt-3">
+                        <div class="card-body">
+                            <div class="sec-label">Security</div>
+                            <p style="font-size:11px;color:var(--text-muted);margin:6px 0 10px">
+                                Set this header in Nginx Proxy Manager for each proxy entry pointing to WakeLab:
+                            </p>
+                            <div style="background:var(--bg-deep);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-size:12px;margin-bottom:12px">
+                                <span style="color:var(--text-dim)">X-Wake-Proxy-Token:</span>
+                                <code style="color:var(--blue);user-select:all;margin-left:6px" id="wp-token-val">loading…</code>
+                            </div>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="regenWakeProxyToken(this)">
+                                <i class="bi bi-arrow-clockwise me-1"></i>Regenerate token
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="card mt-3">
+                        <div class="card-body">
+                            <div class="sec-label">Access Control</div>
+
+                            <div class="push-evt-row">
+                                <div class="push-evt-info">
+                                    <span class="notif-evt-icon" style="color:#8b949e"><i class="bi bi-house-lock"></i></span>
+                                    <div>
+                                        <span class="push-evt-label">Local network only</span>
+                                        <div style="font-size:11px;color:var(--text-dim)">Only wake servers for requests from allowed IP ranges</div>
+                                    </div>
+                                </div>
+                                <div class="form-check form-switch mb-0">
+                                    <input class="form-check-input" type="checkbox" role="switch" id="wp-local-only"
+                                           onchange="saveWpSetting('wp_local_only', this.checked ? '1' : '0');document.getElementById('wp-ranges-section').style.display=this.checked?'':'none'">
+                                </div>
+                            </div>
+
+                            <div id="wp-ranges-section" style="margin:8px 0 12px;display:none">
+                                <label style="font-size:11px;color:var(--text-dim);margin-bottom:4px;display:block">Allowed IP ranges (CIDR, comma-separated)</label>
+                                <textarea class="form-control form-control-sm" id="wp-allowed-ranges" rows="2"
+                                          style="font-family:monospace;font-size:12px"
+                                          placeholder="192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12"
+                                          onchange="saveWpSetting('wp_allowed_ranges', this.value.trim())"></textarea>
+                            </div>
+
+                            <div class="push-evt-row" style="margin-top:4px">
+                                <div class="push-evt-info">
+                                    <span class="notif-evt-icon" style="color:#8b949e"><i class="bi bi-robot"></i></span>
+                                    <div>
+                                        <span class="push-evt-label">Block bots & scanners</span>
+                                        <div style="font-size:11px;color:var(--text-dim)">Block known crawlers and vulnerability scanners by User-Agent</div>
+                                    </div>
+                                </div>
+                                <div class="form-check form-switch mb-0">
+                                    <input class="form-check-input" type="checkbox" role="switch" id="wp-block-bots"
+                                           onchange="saveWpSetting('wp_block_bots', this.checked ? '1' : '0');document.getElementById('wp-ua-section').style.display=this.checked?'':'none'">
+                                </div>
+                            </div>
+
+                            <div id="wp-ua-section" style="margin:8px 0 12px;display:none">
+                                <label style="font-size:11px;color:var(--text-dim);margin-bottom:4px;display:block">Additional blocked User-Agents (one per line, partial match)</label>
+                                <textarea class="form-control form-control-sm" id="wp-blocked-ua" rows="3"
+                                          style="font-family:monospace;font-size:12px"
+                                          placeholder="myspecialbot&#10;custom-scanner"
+                                          onchange="saveWpSetting('wp_blocked_ua', this.value.trim())"></textarea>
+                            </div>
+
+                            <div style="margin-top:8px">
+                                <label style="font-size:11px;color:var(--text-dim);margin-bottom:4px;display:block">Blocked IPs / ranges (CIDR, comma-separated) — always blocked regardless of other rules</label>
+                                <textarea class="form-control form-control-sm" id="wp-blocked-ips" rows="2"
+                                          style="font-family:monospace;font-size:12px"
+                                          placeholder="1.2.3.4, 5.6.7.0/24"
+                                          onchange="saveWpSetting('wp_blocked_ips', this.value.trim())"></textarea>
+                            </div>
+                        </div>
+                    </div>
+
+                </div><!-- /#sp-panel-wakeproxy -->
 
                 <!-- ════ Panel: Cuenta ═══════════════════════════════════ -->
                 <div id="sp-panel-cuenta" style="display:none">
@@ -3267,8 +3279,7 @@ location /_wl/ {
                     </div>
                 </div>
 
-                <?php /* V2 — Panel UPS deshabilitado temporalmente */ ?>
-                <?php /* <script>
+                <script>
                 function _upsHeaderEl(){return document.getElementById('ups-custom-headers-val');}
                 function _upsSetHeader(v){var h=_upsHeaderEl();if(h)h.textContent='{"X-Webhook-Token": "'+(v||'YOUR_TOKEN')+'"}';}
                 function upsTokenInput(v){
@@ -3308,91 +3319,294 @@ location /_wl/ {
                 $upsWebhookUrl = $upsBaseUrl . '/webhook.php';
                 ?>
                 <div id="sp-panel-ups" style="display:none">
-                    <div class="card mb-3">
+                    <?php
+                    $savedPveId   = getSettingFallback($pdo, 'nut_last_pve_id',   '');
+                    $savedVmid    = getSettingFallback($pdo, 'nut_last_vmid',     '');
+                    $savedUps     = getSettingFallback($pdo, 'nut_last_ups_name', '');
+                    $isConfigured = $savedPveId && $savedVmid && $savedUps;
+                    $nutToken     = getSettingFallback($pdo, 'ups_webhook_token', '');
+                    $nutBaseUrl   = getSettingFallback($pdo, 'wakelab_base_url',  '');
+                    $nutMissing   = [];
+                    if (!$nutToken)   $nutMissing[] = ['field' => 'Webhook token',    'where' => 'UPS Webhook (right)'];
+                    if (!$nutBaseUrl) $nutMissing[] = ['field' => 'WakeLab Base URL', 'where' => 'Settings → General'];
+                    $pveServers   = $pdo->query("SELECT id, hostname FROM servers WHERE hypervisor_type='pve' AND (proxmox_vmid IS NULL OR proxmox_vmid=0) ORDER BY hostname")->fetchAll();
+                    ?>
+
+                    <!-- ① Battery Status (full width, only if NUT configured) -->
+                    <?php if ($isConfigured): ?>
+                    <div class="card mb-3" id="ups-battery-card">
                         <div class="card-body">
-                            <div class="sec-label mb-3">UPS Webhook (Nutify / NUT)</div>
-
-                            <!-- Token -->
-                            <div class="mb-3">
-                                <div style="font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:6px">Authentication token</div>
-                                <div style="background:var(--bg-deep);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;display:flex;align-items:center;gap:10px">
-                                    <i class="bi bi-shield-lock-fill" style="color:var(--amber);font-size:15px;flex-shrink:0"></i>
-                                    <input type="text" id="ups-webhook-token"
-                                        style="flex:1;background:none;border:none;outline:none;font-family:monospace;font-size:.75rem;color:var(--text);min-width:0"
-                                        value="<?= htmlspecialchars($upsToken) ?>"
-                                        placeholder="(no token — generate one)"
-                                        oninput="upsTokenInput(this.value)">
-                                    <button type="button" class="btn btn-sm btn-outline-secondary" style="flex-shrink:0;white-space:nowrap"
-                                        onclick="upsTokenGenerate()">
-                                        <i class="bi bi-arrow-repeat me-1"></i>Generate
-                                    </button>
-                                    <button class="btn btn-sm btn-outline-secondary" style="flex-shrink:0"
-                                        onclick="upsTokenCopy(this)">
-                                        <i class="bi bi-copy"></i>
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+                                <div class="sec-label" style="margin-bottom:0">Battery Status</div>
+                                <div style="display:flex;align-items:center;gap:8px">
+                                    <span id="ups-bat-updated" style="font-size:10px;color:var(--text-dim)"></span>
+                                    <button class="btn btn-outline-secondary btn-sm" onclick="fetchUpsBatteryStatus()" style="padding:2px 8px" title="Refresh">
+                                        <i class="bi bi-arrow-clockwise"></i>
                                     </button>
                                 </div>
                             </div>
-
-
-                            <!-- Config Nutify -->
-                            <div class="mb-3">
-                                <div style="font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:8px">How to configure in Nutify</div>
-                                <div style="display:flex;flex-direction:column;gap:6px;font-size:12px">
-                                    <?php
-                                    $customHeaderVal = '{"X-Webhook-Token": "' . ($upsToken ?: 'YOUR_TOKEN') . '"}';
-                                    $copyFields = [
-                                        'URL'            => $upsWebhookUrl,
-                                        'Custom Headers' => $customHeaderVal,
-                                    ];
-                                    $staticFields = [
-                                        'Content Type'   => 'application/json',
-                                        'Authentication' => 'None (do not use Bearer Token)',
-                                        'Verify SSL'     => 'Disable — this is local HTTP, not HTTPS',
-                                    ];
-                                    foreach (array_merge($copyFields, $staticFields) as $label => $val):
-                                        $canCopy = isset($copyFields[$label]);
-                                        $isHeaders = ($label === 'Custom Headers');
-                                        $valEsc  = htmlspecialchars($val);
-                                        $valJs   = htmlspecialchars(json_encode($val), ENT_QUOTES);
-                                    ?>
-                                    <div style="background:var(--bg-deep);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;display:flex;align-items:center;gap:10px">
-                                        <span style="font-size:10px;font-weight:700;color:var(--text-dim);min-width:100px;flex-shrink:0"><?= htmlspecialchars($label) ?></span>
-                                        <code id="<?= $isHeaders ? 'ups-custom-headers-val' : '' ?>" style="flex:1;font-size:11px;color:var(--text);background:none;padding:0;word-break:break-all"><?= $valEsc ?></code>
-                                        <?php if ($canCopy): ?>
-                                        <button class="btn btn-sm btn-outline-secondary" style="flex-shrink:0;padding:2px 7px"
-                                            onclick="(function(btn){var v=<?= $isHeaders ? "document.getElementById('ups-custom-headers-val').textContent" : $valJs ?>;var i=btn.querySelector('i');_clipboardCopy(v,function(){i.className='bi bi-check-lg';setTimeout(function(){i.className='bi bi-copy'},1800)},function(){});})(this)">
-                                            <i class="bi bi-copy"></i>
-                                        </button>
-                                        <?php endif; ?>
-                                    </div>
-                                    <?php endforeach; ?>
-                                    <div style="font-size:11px;color:var(--text-dim);padding:4px 2px">
-                                        <i class="bi bi-info-circle me-1"></i>Events to enable in Nutify: <code style="font-size:10px">onbatt</code>, <code style="font-size:10px">lowbatt</code>, <code style="font-size:10px">online</code>.
-                                    </div>
-                                </div>
+                            <div id="ups-battery-widget" style="min-height:56px">
+                                <span style="color:var(--text-dim);font-size:12px">Loading…</span>
                             </div>
-
-                            <!-- Timer -->
-                            <div class="form-row" style="border-top:1px solid var(--border-sub);padding-top:14px;margin-top:4px">
-                                <span class="form-label">Wait timer <span class="fmodal-label-hint">seconds before shutdown (0 = immediate)</span></span>
-                                <input type="number" min="0" max="3600" class="form-control" style="width:90px"
-                                    id="ups-delay-sec"
-                                    value="<?= intval(getSettingFallback($pdo,'ups_shutdown_delay_sec','0')) ?>"
-                                    oninput="_debounce('ups_delay', () => fetch('php/api.php',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'update_setting',key:'ups_shutdown_delay_sec',value:document.getElementById('ups-delay-sec').value})}))">
+                            <div style="margin-top:14px;display:flex;align-items:center;gap:10px;border-top:1px solid var(--border-sub);padding-top:12px">
+                                <span style="font-size:11px;color:var(--text-dim);white-space:nowrap">Poll every</span>
+                                <select id="ups-poll-interval-sel" class="form-select form-select-sm" style="width:auto;font-size:12px"
+                                    onchange="setUpsPollInterval(parseInt(this.value))">
+                                    <?php $upsPollSaved = intval(getSettingFallback($pdo,'ups_poll_interval_sec','300')); ?>
+                                    <option value="60"  <?= $upsPollSaved===60  ?'selected':'' ?>>1 min</option>
+                                    <option value="300" <?= $upsPollSaved===300 ?'selected':'' ?>>5 min</option>
+                                    <option value="600" <?= $upsPollSaved===600 ?'selected':'' ?>>10 min</option>
+                                    <option value="0"   <?= $upsPollSaved===0   ?'selected':'' ?>>Manual only</option>
+                                </select>
+                                <span style="font-size:11px;color:var(--text-dim)">· on battery: every 10 s</span>
                             </div>
                         </div>
                     </div>
+                    <?php endif; ?>
 
+                    <!-- ② NUT Auto-configure + UPS Webhook side by side -->
+                    <div class="row g-3 mb-3">
+
+                        <!-- NUT Auto-configure -->
+                        <div class="col-12 col-lg-6">
+                        <div class="card h-100">
+                            <div class="card-body">
+                                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+                                    <div class="sec-label" style="margin-bottom:0">NUT Auto-configure</div>
+                                    <?php if ($isConfigured): ?>
+                                    <span style="font-size:11px;font-weight:600;color:var(--green);background:rgba(40,167,69,.1);border:1px solid rgba(40,167,69,.2);border-radius:20px;padding:3px 12px;display:flex;align-items:center;gap:5px">
+                                        <i class="bi bi-shield-check" style="font-size:12px"></i>Active
+                                    </span>
+                                    <?php endif; ?>
+                                </div>
+
+                                <?php if ($isConfigured):
+                                    $savedPveHostname = '';
+                                    foreach ($pveServers as $ps) { if ($ps['id'] == $savedPveId) { $savedPveHostname = $ps['hostname']; break; } }
+                                ?>
+                                <!-- ── Configured state ───────────────────── -->
+                                <div id="nut-summary">
+                                    <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 20px;font-size:12px;margin-bottom:16px">
+                                        <span style="color:var(--text-dim);font-weight:600;white-space:nowrap">PVE Host</span>
+                                        <span style="color:var(--text)"><?= htmlspecialchars($savedPveHostname ?: 'srv-mini') ?> <span style="color:var(--text-dim)">· LXC <?= htmlspecialchars($savedVmid) ?></span></span>
+                                        <span style="color:var(--text-dim);font-weight:600">UPS</span>
+                                        <span style="color:var(--text);font-family:monospace"><?= htmlspecialchars($savedUps) ?></span>
+                                    </div>
+                                    <div id="nut-test-result" style="display:none;font-size:12px;padding:8px 12px;border-radius:var(--radius);margin-bottom:12px;border:1px solid var(--border)"></div>
+                                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                                        <button class="btn btn-sm" id="nut-test-conn-btn" onclick="nutTestConnection()"
+                                            style="background:rgba(40,167,69,.15);color:var(--green);border:1px solid rgba(40,167,69,.3);font-weight:600">
+                                            <i class="bi bi-check2-circle me-1"></i>Test connection
+                                        </button>
+                                        <button class="btn btn-sm btn-link text-muted ps-1" onclick="nutToggleReconfigure()" id="nut-reconf-toggle-btn"
+                                            style="font-size:11px;text-decoration:none" title="Only needed if you changed the token, URL or moved the LXC">
+                                            <i class="bi bi-arrow-repeat me-1"></i>Reconfigure
+                                        </button>
+                                    </div>
+                                    <div style="font-size:11px;color:var(--text-dim);margin-top:8px">
+                                        Only needed if you changed the <strong>webhook token</strong>, the <strong>WakeLab URL</strong>, or moved the LXC.
+                                    </div>
+                                </div>
+
+                                <!-- ── Reconfigure / first-time form ─────── -->
+                                <div id="nut-form" style="<?= $isConfigured ? 'display:none;' : '' ?>margin-top:<?= $isConfigured ? '16px' : '0' ?>">
+                                    <?php if (!empty($nutMissing)): ?>
+                                    <div style="background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.25);border-radius:var(--radius);padding:10px 14px;font-size:12px;margin-bottom:14px">
+                                        <div style="font-weight:600;margin-bottom:6px;color:var(--amber)"><i class="bi bi-exclamation-triangle me-1"></i>Required before using:</div>
+                                        <?php foreach ($nutMissing as $m): ?>
+                                        <div style="padding:2px 0;color:var(--text-muted)">• <strong><?= htmlspecialchars($m['field']) ?></strong> — <?= htmlspecialchars($m['where']) ?></div>
+                                        <?php endforeach; ?>
+                                    </div>
+                                    <?php endif; ?>
+
+                                    <div class="form-row">
+                                        <span class="form-label">PVE Host</span>
+                                        <select class="form-select" id="nut-pve-id" style="max-width:200px" <?= !empty($nutMissing) || empty($pveServers) ? 'disabled' : '' ?>>
+                                            <option value="">Select...</option>
+                                            <?php foreach ($pveServers as $ps): ?>
+                                            <option value="<?= $ps['id'] ?>" <?= $ps['id'] == $savedPveId ? 'selected' : '' ?>><?= htmlspecialchars($ps['hostname']) ?></option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                        <?php if (empty($pveServers)): ?>
+                                        <span style="font-size:11px;color:var(--text-dim);margin-left:8px">No PVE servers registered</span>
+                                        <?php endif; ?>
+                                    </div>
+
+                                    <div class="form-row">
+                                        <span class="form-label">NUT LXC VMID</span>
+                                        <div style="display:flex;gap:8px;align-items:center">
+                                            <input type="number" min="1" max="999999" class="form-control" style="width:90px" id="nut-vmid" placeholder="VMID"
+                                                value="<?= htmlspecialchars($savedVmid) ?>" <?= !empty($nutMissing) ? 'disabled' : '' ?>>
+                                            <button class="btn btn-outline-secondary btn-sm" onclick="nutDetect()" <?= !empty($nutMissing) ? 'disabled' : '' ?> id="nut-detect-btn">
+                                                <i class="bi bi-search me-1"></i>Detect UPS
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div id="nut-detect-status" style="display:none;margin-top:2px;margin-bottom:6px;font-size:12px;padding:8px 12px;border-radius:var(--radius);border:1px solid var(--border)"></div>
+
+                                    <div class="form-row" id="nut-ups-row" style="display:none">
+                                        <span class="form-label">UPS Name</span>
+                                        <select class="form-select" id="nut-ups-name" style="max-width:200px"
+                                            onchange="fetch('php/api.php',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'update_setting',key:'nut_last_ups_name',value:this.value})})">
+                                        </select>
+                                    </div>
+
+                                    <div style="margin-top:14px;display:flex;gap:8px;align-items:center">
+                                        <button class="btn btn-primary btn-sm" id="nut-configure-btn" onclick="nutConfigure()" style="display:none">
+                                            <i class="bi bi-gear-fill me-1"></i>Configure NUT
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <?php else: ?>
+                                <!-- ── Not configured ─────────────────────── -->
+                                <div style="font-size:12px;color:var(--text-dim);margin-bottom:16px">
+                                    Installs and configures the WakeLab webhook inside a NUT LXC automatically via PVE SSH.
+                                </div>
+
+                                <?php if (!empty($nutMissing)): ?>
+                                <div style="background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.25);border-radius:var(--radius);padding:10px 14px;font-size:12px;margin-bottom:14px">
+                                    <div style="font-weight:600;margin-bottom:6px;color:var(--amber)"><i class="bi bi-exclamation-triangle me-1"></i>Required before using:</div>
+                                    <?php foreach ($nutMissing as $m): ?>
+                                    <div style="padding:2px 0;color:var(--text-muted)">• <strong><?= htmlspecialchars($m['field']) ?></strong> — <?= htmlspecialchars($m['where']) ?></div>
+                                    <?php endforeach; ?>
+                                </div>
+                                <?php endif; ?>
+
+                                <div class="form-row">
+                                    <span class="form-label">PVE Host</span>
+                                    <select class="form-select" id="nut-pve-id" style="max-width:200px" <?= !empty($nutMissing) || empty($pveServers) ? 'disabled' : '' ?>>
+                                        <option value="">Select...</option>
+                                        <?php foreach ($pveServers as $ps): ?>
+                                        <option value="<?= $ps['id'] ?>"><?= htmlspecialchars($ps['hostname']) ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <?php if (empty($pveServers)): ?>
+                                    <span style="font-size:11px;color:var(--text-dim);margin-left:8px">No PVE servers registered</span>
+                                    <?php endif; ?>
+                                </div>
+
+                                <div class="form-row">
+                                    <span class="form-label">NUT LXC VMID</span>
+                                    <div style="display:flex;gap:8px;align-items:center">
+                                        <input type="number" min="1" max="999999" class="form-control" style="width:90px" id="nut-vmid" placeholder="VMID" <?= !empty($nutMissing) ? 'disabled' : '' ?>>
+                                        <button class="btn btn-outline-secondary btn-sm" onclick="nutDetect()" <?= !empty($nutMissing) ? 'disabled' : '' ?> id="nut-detect-btn">
+                                            <i class="bi bi-search me-1"></i>Detect UPS
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div id="nut-detect-status" style="display:none;margin-top:2px;margin-bottom:6px;font-size:12px;padding:8px 12px;border-radius:var(--radius);border:1px solid var(--border)"></div>
+
+                                <div class="form-row" id="nut-ups-row" style="display:none">
+                                    <span class="form-label">UPS Name</span>
+                                    <select class="form-select" id="nut-ups-name" style="max-width:200px"
+                                        onchange="fetch('php/api.php',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'update_setting',key:'nut_last_ups_name',value:this.value})})">
+                                    </select>
+                                </div>
+
+                                <div style="margin-top:14px">
+                                    <button class="btn btn-primary btn-sm" id="nut-configure-btn" onclick="nutConfigure()" style="display:none">
+                                        <i class="bi bi-gear-fill me-1"></i>Configure NUT
+                                    </button>
+                                </div>
+                                <?php endif; ?>
+
+                                <div id="nut-steps" style="margin-top:16px;font-size:12px;flex-direction:column;gap:0"></div>
+                            </div>
+                        </div>
+                        </div>
+
+                        <!-- UPS Webhook -->
+                        <div class="col-12 col-lg-6">
+                        <div class="card h-100">
+                            <div class="card-body">
+                                <div class="sec-label mb-3">UPS Webhook</div>
+
+                                <!-- Token -->
+                                <div class="mb-3">
+                                    <div style="font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:6px">Authentication token</div>
+                                    <div style="background:var(--bg-deep);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;display:flex;align-items:center;gap:10px">
+                                        <i class="bi bi-shield-lock-fill" style="color:var(--amber);font-size:15px;flex-shrink:0"></i>
+                                        <input type="text" id="ups-webhook-token"
+                                            style="flex:1;background:none;border:none;outline:none;font-family:monospace;font-size:.75rem;color:var(--text);min-width:0"
+                                            value="<?= htmlspecialchars($upsToken) ?>"
+                                            placeholder="(no token — generate one)"
+                                            oninput="upsTokenInput(this.value)">
+                                        <button type="button" class="btn btn-sm btn-outline-secondary" style="flex-shrink:0;white-space:nowrap"
+                                            onclick="upsTokenGenerate()">
+                                            <i class="bi bi-arrow-repeat me-1"></i>Generate
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-secondary" style="flex-shrink:0"
+                                            onclick="upsTokenCopy(this)">
+                                            <i class="bi bi-copy"></i>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- Manual integration (collapsible) -->
+                                <div class="mb-3">
+                                    <button type="button" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none';this.querySelector('i').className='bi bi-'+(this.nextElementSibling.style.display===''?'chevron-up':'chevron-down')+' me-1'"
+                                        style="background:none;border:none;padding:0;font-size:11px;color:var(--text-dim);cursor:pointer;display:flex;align-items:center;gap:0;font-weight:600;letter-spacing:.02em">
+                                        <i class="bi bi-chevron-down me-1"></i>Manual integration
+                                    </button>
+                                    <div style="display:none;margin-top:10px">
+                                        <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">
+                                            Use these if you're connecting another system (Nutify, Home Assistant, custom scripts…).
+                                        </div>
+                                        <?php
+                                        $customHeaderVal = '{"X-Webhook-Token": "' . ($upsToken ?: 'YOUR_TOKEN') . '"}';
+                                        $endpointFields  = ['URL' => $upsWebhookUrl, 'Custom Headers' => $customHeaderVal];
+                                        ?>
+                                        <div style="display:flex;flex-direction:column;gap:6px;font-size:12px">
+                                            <?php foreach ($endpointFields as $label => $val):
+                                                $isHeaders = ($label === 'Custom Headers');
+                                                $valEsc    = htmlspecialchars($val);
+                                                $valJs     = htmlspecialchars(json_encode($val), ENT_QUOTES);
+                                            ?>
+                                            <div style="background:var(--bg-deep);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;display:flex;align-items:center;gap:10px">
+                                                <span style="font-size:10px;font-weight:700;color:var(--text-dim);min-width:86px;flex-shrink:0"><?= htmlspecialchars($label) ?></span>
+                                                <code id="<?= $isHeaders ? 'ups-custom-headers-val' : '' ?>" style="flex:1;font-size:11px;color:var(--text);background:none;padding:0;word-break:break-all"><?= $valEsc ?></code>
+                                                <button class="btn btn-sm btn-outline-secondary" style="flex-shrink:0;padding:2px 7px"
+                                                    onclick="(function(btn){var v=<?= $isHeaders ? "document.getElementById('ups-custom-headers-val').textContent" : $valJs ?>;var i=btn.querySelector('i');_clipboardCopy(v,function(){i.className='bi bi-check-lg';setTimeout(function(){i.className='bi bi-copy'},1800)},function(){});})(this)">
+                                                    <i class="bi bi-copy"></i>
+                                                </button>
+                                            </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Timer -->
+                                <div class="form-row" style="border-top:1px solid var(--border-sub);padding-top:14px;margin-top:4px">
+                                    <span class="form-label">Wait timer <span class="fmodal-label-hint">seconds before shutdown (0 = immediate)</span></span>
+                                    <input type="number" min="0" max="3600" class="form-control" style="width:90px"
+                                        id="ups-delay-sec"
+                                        value="<?= intval(getSettingFallback($pdo,'ups_shutdown_delay_sec','0')) ?>"
+                                        oninput="_debounce('ups_delay', () => fetch('php/api.php',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'update_setting',key:'ups_shutdown_delay_sec',value:document.getElementById('ups-delay-sec').value})}))">
+                                </div>
+                            </div>
+                        </div>
+                        </div>
+
+                    </div><!-- /.row -->
+
+                    <!-- ③ UPS Events (full width) -->
                     <div class="card">
                         <div class="card-body">
-                            <div class="sec-label mb-1">Last UPS events</div>
-                            <div id="ups-events-list" style="font-size:12px;color:var(--text-dim);margin-top:8px">
-                                <button class="btn btn-outline-secondary btn-sm" onclick="loadUpsEvents()">Load events</button>
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+                                <div class="sec-label" style="margin-bottom:0">UPS Events</div>
+                                <button class="btn btn-outline-secondary btn-sm" onclick="loadUpsEvents(this)" id="ups-events-refresh-btn" style="padding:3px 10px">
+                                    <i class="bi bi-arrow-clockwise"></i>
+                                </button>
+                            </div>
+                            <div id="ups-events-list" style="font-size:12px">
+                                <span style="color:var(--text-dim)">Loading…</span>
                             </div>
                         </div>
                     </div>
                 </div>
-                */ ?>
 
             </div>
         </div>
@@ -3803,7 +4017,7 @@ location /_wl/ {
         </div>
 
         <script>
-            window.APP_CONFIG = { pollingInterval: <?= $pollingIntervalSec * 1000 ?> };
+            window.APP_CONFIG = { pollingInterval: <?= $pollingIntervalSec * 1000 ?>, upsPollSecs: <?= intval(getSettingFallback($pdo,'ups_poll_interval_sec','300')) ?> };
             window.WP_DATA = <?= json_encode(array_values($wake_proxies)) ?>;
             window.WAKELAB_KEY_READY = <?= $wakeLabKeyReady ? 'true' : 'false' ?>;
 

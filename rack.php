@@ -100,6 +100,10 @@ $upsEvents = []; $upsManagedHosts = []; $upsManagedCount = 0;
 
 $pollingMs = intval(rackSetting($pdo, 'polling_interval_sec', '30')) * 1000;
 
+$bcPveId = rackSetting($pdo, 'nut_last_pve_id');
+$bcVmid  = rackSetting($pdo, 'nut_last_vmid');
+$bcUps   = rackSetting($pdo, 'nut_last_ups_name');
+
 // Helper: format TIME column HH:MM:SS → HH:MM
 function fmtTime(?string $t): string {
     if (!$t) return '--:--';
@@ -244,11 +248,17 @@ body { display: flex; flex-direction: column; }
         <img src="assets/icons/web-app-manifest-192x192.png" alt="WakeLab"> WakeLab
     </span>
     <div class="rk-nav-sep"></div>
-    <?php /* V2 — UPS nav bar deshabilitado temporalmente
+    <!-- UPS battery pill -->
     <div class="rk-nav-ups">
-        ... UPS pills y chips ...
+        <span id="rk-ups-pill" class="rk-ups-pill" style="display:none;cursor:pointer" onclick="rkView('ups')" title="UPS battery status">
+            <i id="rk-ups-icon" class="bi bi-battery-full" style="font-size:13px"></i>
+            <strong id="rk-ups-pct">—%</strong>
+            <span class="rk-ups-sep"></span>
+            <span id="rk-ups-runtime" style="font-size:10px;opacity:.8"></span>
+            <span class="rk-ups-sep"></span>
+            <span id="rk-ups-status-label" class="rk-ups-ago"></span>
+        </span>
     </div>
-    */ ?>
     <div class="rk-nav-end">
         <div class="topbar-stats">
             <span><span class="dot dot-green"></span><span id="rk-cnt-on">—</span> online</span>
@@ -278,6 +288,12 @@ body { display: flex; flex-direction: column; }
             <?php $wpActive = count(array_filter($wake_proxies, fn($w) => !empty($w['active']))); ?>
             <span class="rk-sb-dot" style="background:<?= $wpActive < count($wake_proxies) ? 'var(--amber)' : 'var(--green)' ?>"></span>
         </button>
+        <?php if ($bcPveId ?? ''): ?>
+        <button class="rk-sb-btn" id="rk-sb-ups" onclick="rkView('ups')" title="UPS Battery">
+            <i class="bi bi-battery-half"></i>
+            <span class="rk-sb-dot" id="rk-ups-sb-dot" style="background:var(--green)"></span>
+        </button>
+        <?php endif; ?>
     </aside>
 
     <!-- Main -->
@@ -417,6 +433,32 @@ body { display: flex; flex-direction: column; }
             </div>
         </div><!-- /#rk-view-wp -->
 
+        <!-- View: UPS Battery -->
+        <?php if ($bcPveId ?? ''): ?>
+        <div id="rk-view-ups" style="display:none;max-width:480px;margin:0 auto">
+            <div style="display:flex;align-items:center;gap:14px;margin-bottom:20px">
+                <span style="font-size:13px;font-weight:600"><i class="bi bi-battery-half me-2" style="color:var(--amber)"></i>UPS Battery</span>
+                <button onclick="rkFetchBattery()" style="background:none;border:1px solid var(--border);border-radius:var(--radius);padding:3px 10px;font-size:11px;color:var(--text-muted);cursor:pointer">
+                    <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                </button>
+                <span id="rk-ups-updated" style="font-size:10px;color:var(--text-dim);margin-left:auto"></span>
+            </div>
+
+            <!-- Battery widget -->
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:20px 24px;margin-bottom:16px">
+                <div id="rk-bat-widget" style="min-height:80px">
+                    <span style="color:var(--text-dim);font-size:12px">Loading…</span>
+                </div>
+            </div>
+
+            <!-- Last event -->
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:16px 20px">
+                <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);margin-bottom:10px">Last Event</div>
+                <div id="rk-bat-lastevent" style="font-size:12px;color:var(--text-dim)">—</div>
+            </div>
+        </div>
+        <?php endif; ?>
+
     </main>
 </div>
 
@@ -462,11 +504,15 @@ function rkToggleTheme() {
 
 // ── Sidebar view switch ────────────────────────────────────
 function rkView(name) {
-    ['dash','wp'].forEach(v => {
-        document.getElementById('rk-view-' + v).style.display = v === name ? '' : 'none';
-        document.getElementById('rk-sb-' + v).classList.toggle('active', v === name);
+    const views = ['dash','wp','ups'];
+    views.forEach(v => {
+        const el = document.getElementById('rk-view-' + v);
+        if (el) el.style.display = v === name ? '' : 'none';
+        const btn = document.getElementById('rk-sb-' + v);
+        if (btn) btn.classList.toggle('active', v === name);
     });
     if (name === 'wp') rkCheckWakeProxies();
+    if (name === 'ups') rkFetchBattery();
 }
 
 // ── Toast ──────────────────────────────────────────────────
@@ -627,6 +673,100 @@ function rkCheckWakeProxies() {
     });
     <?php endif; ?>
 }
+
+// ── UPS Battery ────────────────────────────────────────────
+<?php if ($bcPveId ?? ''): ?>
+let _upsPollTimer = null;
+let _upsOnBattery = false;
+
+function rkFetchBattery() {
+    rkApiFetch('php/api.php', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({action:'ups_battery_status'})
+    }).then(r=>r.json()).then(d=>{
+        if (d.status !== 'success') return;
+        const b = d.data;
+        _upsOnBattery = (b.status || '').includes('OB');
+        _rkRenderBattery(b);
+        _rkUpdatePill(b);
+        _rkSetPollInterval();
+    }).catch(()=>{});
+}
+
+function _rkRenderBattery(b) {
+    const pct     = b.charge != null ? +b.charge : null;
+    const runtime = b.runtime != null ? Math.round(+b.runtime / 60) : null;
+    const status  = b.status  || '—';
+    const onBat   = status.includes('OB');
+    const lowBat  = status.includes('LB');
+
+    const barColor = lowBat ? 'var(--red)' : onBat ? 'var(--amber)' : 'var(--green)';
+    const icon     = lowBat ? 'bi-battery' : onBat ? 'bi-battery-half' : 'bi-battery-full';
+    const statusLabel = onBat ? (lowBat ? 'Low battery' : 'On battery') : 'Online';
+
+    const widget = document.getElementById('rk-bat-widget');
+    if (!widget) return;
+
+    widget.innerHTML = `
+        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px">
+            <i class="bi ${icon}" style="font-size:22px;color:${barColor}"></i>
+            <span style="font-size:36px;font-weight:700;line-height:1;color:${barColor}">${pct != null ? pct+'%' : '—'}</span>
+            <span style="font-size:12px;color:var(--text-dim);margin-left:4px">${statusLabel}</span>
+        </div>
+        <div style="background:var(--bg-deep);border-radius:6px;height:8px;overflow:hidden;margin-bottom:14px">
+            <div style="width:${pct ?? 0}%;height:100%;background:${barColor};border-radius:6px;transition:width .4s"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;font-size:11px">
+            <div><span style="color:var(--text-dim)">Runtime</span><br><strong>${runtime != null ? runtime+'min' : '—'}</strong></div>
+            <div><span style="color:var(--text-dim)">UPS</span><br><strong>${b.ups_name || '—'}</strong></div>
+            <div><span style="color:var(--text-dim)">Input voltage</span><br><strong>${b.input_voltage != null ? b.input_voltage+'V' : '—'}</strong></div>
+            <div><span style="color:var(--text-dim)">Battery voltage</span><br><strong>${b.battery_voltage != null ? b.battery_voltage+'V' : '—'}</strong></div>
+        </div>`;
+
+    const upd = document.getElementById('rk-ups-updated');
+    if (upd) upd.textContent = 'Updated ' + new Date().toLocaleTimeString();
+}
+
+function _rkUpdatePill(b) {
+    const pct     = b.charge  != null ? +b.charge  : null;
+    const runtime = b.runtime != null ? Math.round(+b.runtime / 60) : null;
+    const status  = b.status || '';
+    const onBat   = status.includes('OB');
+    const lowBat  = status.includes('LB');
+
+    const pill    = document.getElementById('rk-ups-pill');
+    const icon    = document.getElementById('rk-ups-icon');
+    const pctEl   = document.getElementById('rk-ups-pct');
+    const rtEl    = document.getElementById('rk-ups-runtime');
+    const label   = document.getElementById('rk-ups-status-label');
+    const dot     = document.getElementById('rk-ups-sb-dot');
+
+    if (pill) pill.style.display = '';
+    if (pctEl) pctEl.textContent = pct != null ? pct+'%' : '—%';
+    if (rtEl)  rtEl.textContent  = runtime != null ? runtime+'min' : '';
+    if (label) label.textContent = lowBat ? 'LOW' : onBat ? 'BATT' : 'OK';
+
+    pill?.classList.toggle('rk-ups-pill--danger', lowBat);
+    pill?.classList.toggle('rk-ups-pill--warn', onBat && !lowBat);
+    pill?.classList.toggle('rk-ups-pill--ok', !onBat);
+
+    const iconClass = lowBat ? 'bi-battery' : onBat ? 'bi-battery-half' : 'bi-battery-full';
+    if (icon) icon.className = 'bi ' + iconClass;
+
+    const dotColor = lowBat ? 'var(--red)' : onBat ? 'var(--amber)' : 'var(--green)';
+    if (dot) dot.style.background = dotColor;
+}
+
+function _rkSetPollInterval() {
+    clearInterval(_upsPollTimer);
+    const ms = _upsOnBattery ? 10000 : 5 * 60 * 1000;
+    _upsPollTimer = setInterval(rkFetchBattery, ms);
+}
+
+// Auto-start battery polling
+rkFetchBattery();
+<?php endif; ?>
 
 rkSync();
 setInterval(rkSync, POLL_MS);
